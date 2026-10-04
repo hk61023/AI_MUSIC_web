@@ -33,6 +33,7 @@ import {
   sendMedia,
 } from "./media.mjs";
 import { trackHtml, escapeHtml } from "./seo.mjs";
+import { readAudioMetadata } from "./audio-metadata.mjs";
 const production = process.env.NODE_ENV === "production";
 if (
   production &&
@@ -233,6 +234,87 @@ app.put("/api/admin/tracks/:id", (req, res) => {
 });
 const uploadDir = path.join(dataDir, "uploads");
 await mkdir(uploadDir, { recursive: true });
+// Browser sends one file at a time: bounded memory/disk use and per-file results.
+const importMp3 = multer({
+  dest: uploadDir,
+  limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 0 },
+  fileFilter(req, file, cb) {
+    const valid =
+      file.fieldname === "audio" && /\.(mp3|m4a)$/i.test(file.originalname);
+    cb(valid ? null : new Error("批量导入只支持 MP3／M4A 文件"), valid);
+  },
+}).single("audio");
+const activeImports = new Set();
+app.post(
+  ["/api/admin/import-audio", "/api/admin/import-mp3"],
+  (req, res, next) => {
+    const importId = req.get("X-Import-ID") || randomUUID();
+    if (!z.string().uuid().safeParse(importId).success)
+      return res.status(400).json({ error: "导入标识无效" });
+    if (activeImports.has(importId))
+      return res.status(409).json({ error: "该文件正在导入，请稍后重试" });
+    activeImports.add(importId);
+    importMp3(req, res, async (error) => {
+      let created;
+      try {
+        if (error) throw error;
+        if (!req.file)
+          return res.status(400).json({ error: "请选择 MP3／M4A 文件" });
+        const existing = allTracks().find((t) => t.importId === importId);
+        if (existing) return res.status(201).json(existing);
+        const metadata = await readAudioMetadata(
+          req.file.path,
+          req.file.originalname,
+        );
+        const { duration, ...fields } = metadata;
+        const doc = trackSchema.parse({
+          ...fields,
+          story: "",
+          mood: "",
+          vocal: "instrumental",
+          source: "其他",
+          generatedAt: "",
+          tags: [],
+          prompt: "",
+          featured: false,
+          downloadAllowed: false,
+          rightsConfirmed: false,
+          rightsEvidence: "",
+          licenseText: "",
+        });
+        created = {
+          ...doc,
+          id: randomUUID(),
+          importId,
+          createdAt: new Date().toISOString(),
+          status: "draft",
+          processing: "queued",
+          duration: metadata.duration,
+          hasCover: false,
+          artwork: "violet",
+          originalName: req.file.originalname,
+        };
+        saveTrack(created);
+        await ingest(created.id, req.file.path);
+        res.status(201).json(created);
+      } catch (error) {
+        if (created) {
+          saveTrack({
+            ...created,
+            processing: "failed",
+            processingError: "导入未完成，请在作品编辑页重新上传",
+          });
+          return res.status(201).json({ ...created, processing: "failed" });
+        }
+        if (error instanceof multer.MulterError) return next(error);
+        res.status(400).json({ error: error.message || "无法读取音频信息" });
+      } finally {
+        activeImports.delete(importId);
+        if (req.file) await rm(req.file.path, { force: true });
+      }
+    });
+  },
+);
 const uploading = new Set();
 const upload = multer({
   dest: uploadDir,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus,
   Upload,
@@ -93,6 +93,72 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       artwork: "violet",
       trackIds: [],
     });
+  type ImportRow = {
+    file: File;
+    importId: string;
+    state: "waiting" | "uploading" | "done" | "failed";
+    id?: string;
+    detail?: string;
+  };
+  const [imports, setImports] = useState<ImportRow[]>([]);
+  const stopImport = useRef(false);
+  const [importing, setImporting] = useState(false);
+  const importFiles = async () => {
+    stopImport.current = false;
+    setImporting(true);
+    setError("");
+    setMessage("");
+    try {
+      for (let i = 0; i < imports.length; i++) {
+        if (stopImport.current) break;
+        if (imports[i].state === "done") continue;
+        const row = imports[i];
+        setImports((old) =>
+          old.map((r, j) =>
+            j === i ? { ...r, state: "uploading", detail: "" } : r,
+          ),
+        );
+        try {
+          const body = new FormData();
+          body.append("audio", row.file);
+          const track = await api<Track>("/api/admin/import-audio", {
+            method: "POST",
+            body,
+            headers: { "X-Import-ID": row.importId },
+          });
+          setImports((old) =>
+            old.map((r, j) =>
+              j === i
+                ? {
+                    ...r,
+                    state: "done",
+                    id: track.id,
+                    detail:
+                      track.processing === "failed"
+                        ? "草稿已创建，请在编辑页重新上传"
+                        : `已创建草稿：${track.title}`,
+                  }
+                : r,
+            ),
+          );
+        } catch (e) {
+          setImports((old) =>
+            old.map((r, j) =>
+              j === i
+                ? { ...r, state: "failed", detail: (e as Error).message }
+                : r,
+            ),
+          );
+        }
+      }
+      await load();
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  };
   const load = async () => {
     const [c, s] = await Promise.all([
       api<Catalog>("/api/admin/catalog"),
@@ -250,6 +316,7 @@ export default function Admin({ refresh }: { refresh: () => void }) {
         </div>
         <button
           className="secondary"
+          disabled={busy || importing}
           onClick={() =>
             void run(async () => {
               await api("/api/admin/logout", { method: "POST" });
@@ -292,6 +359,112 @@ export default function Admin({ refresh }: { refresh: () => void }) {
           歌单管理
         </button>
       </div>
+      {tab === "tracks" && (
+        <section
+          className="batch-import upload-panel"
+          aria-label="批量导入 MP3／M4A"
+        >
+          <h2>批量导入 MP3／M4A</h2>
+          <p>
+            读取文件内的标题、艺术家、专辑、发行时间、风格、备注和歌词，自动填写草稿。没有标题标签时使用文件名。
+          </p>
+          <p>
+            每批最多 50 首，每首最多 100 MB、20
+            分钟。导入后请核对生成来源、人声类型和许可，再预览发布。
+          </p>
+          <label>
+            选择多个 MP3／M4A 文件
+            <input
+              type="file"
+              accept=".mp3,.m4a,audio/mpeg,audio/mp4"
+              multiple
+              disabled={busy || importing}
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                if (
+                  files.length > 50 ||
+                  files.some(
+                    (f) =>
+                      !/\.(mp3|m4a)$/i.test(f.name) ||
+                      f.size > 100 * 1024 * 1024,
+                  )
+                ) {
+                  setError("请选择最多 50 个 MP3／M4A 文件，每个不超过 100 MB");
+                  e.target.value = "";
+                  return;
+                }
+                setError("");
+                setImports(
+                  files.map((file) => ({
+                    file,
+                    importId: crypto.randomUUID(),
+                    state: "waiting",
+                  })),
+                );
+              }}
+            />
+          </label>
+          <div className="editor-actions">
+            <button
+              className="primary"
+              disabled={
+                busy || importing || !imports.some((r) => r.state !== "done")
+              }
+              onClick={() => void importFiles()}
+            >
+              <Upload size={16} />
+              {imports.some((r) => r.state === "failed")
+                ? "重试失败／继续导入"
+                : "开始批量导入"}
+            </button>
+            {importing && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  stopImport.current = true;
+                }}
+              >
+                当前文件完成后停止
+              </button>
+            )}
+            <span role={imports.length ? "status" : undefined}>
+              已导入 {imports.filter((r) => r.state === "done").length} /{" "}
+              {imports.length} 首
+            </span>
+          </div>
+          {imports.length > 0 && (
+            <ul className="import-results">
+              {imports.map((r, i) => (
+                <li key={i}>
+                  <span>{r.file.name}</span>
+                  <span>
+                    {
+                      {
+                        waiting: "等待上传",
+                        uploading: "正在上传并读取",
+                        done: "已导入",
+                        failed: "导入失败",
+                      }[r.state]
+                    }
+                  </span>
+                  {r.detail && <small>{r.detail}</small>}
+                  {r.id && (
+                    <button
+                      className="secondary"
+                      disabled={importing}
+                      onClick={() =>
+                        choose(catalog.tracks.find((t) => t.id === r.id))
+                      }
+                    >
+                      编辑草稿
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {error ? (
         <div className="banner form-error" role="alert">
           {error}

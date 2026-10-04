@@ -47,6 +47,7 @@ export const setSetting = (key, value) =>
     )
     .run(key, value);
 export function publicTrack(t) {
-  const { originalName, processingError, rightsEvidence, ...rest } = t;
+  const { originalName, processingError, rightsEvidence, importId, ...rest } =
+    t;
   return rest;
 }

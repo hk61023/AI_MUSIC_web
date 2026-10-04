@@ -11,7 +11,7 @@ const bucket =
     ? new Storage().bucket(process.env.GCS_BUCKET || "")
     : null;
 export const cloudStorage = bucket;
-function command(program, args) {
+export function command(program, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       windowsHide: true,

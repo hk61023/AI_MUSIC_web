@@ -2224,6 +2224,37 @@ small {
     font-size: 12px;
   }
 }
+.batch-import {
+  margin: 24px 0;
+}
+.batch-import label {
+  display: grid;
+  gap: 10px;
+}
+.import-results {
+  list-style: none;
+  padding: 0;
+  max-height: 360px;
+  overflow: auto;
+}
+.import-results li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.import-results li > span:first-child {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.import-results small {
+  width: 100%;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 html {
   scroll-padding-top: 25px;
   scroll-padding-bottom: 130px;

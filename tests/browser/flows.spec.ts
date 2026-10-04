@@ -1,4 +1,75 @@
 import { test, expect } from "@playwright/test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import path from "node:path";
+
+test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async ({ page }) => {
+  mkdirSync("artifacts", { recursive: true });
+  const dir = mkdtempSync(path.resolve("artifacts/browser-import-"));
+  const files = [
+    { name: "batch.mp3", title: "批量 MP3 标签", codec: "libmp3lame" },
+    { name: "batch.m4a", title: "批量 M4A 标签", codec: "aac" },
+  ].map((item) => {
+    const filename = path.join(dir, item.name);
+    const result = spawnSync(
+      process.env.FFMPEG_PATH || "ffmpeg",
+      [
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=2",
+        "-c:a",
+        item.codec,
+        "-metadata",
+        `title=${item.title}`,
+        "-metadata",
+        "artist=批量艺术家",
+        "-metadata",
+        "album=测试专辑",
+        filename,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return {
+      name: item.name,
+      mimeType: item.name.endsWith(".m4a") ? "audio/mp4" : "audio/mpeg",
+      buffer: readFileSync(filename),
+    };
+  });
+  await page.goto("/admin");
+  await page
+    .getByRole("textbox", { name: "管理员密码" })
+    .fill("browser-test-only-password");
+  await page.getByRole("button", { name: "进入管理后台" }).click();
+  const panel = page.getByRole("region", { name: "批量导入 MP3／M4A" });
+  await panel
+    .getByLabel("选择多个 MP3／M4A 文件")
+    .setInputFiles([
+      {
+        name: "broken.mp3",
+        mimeType: "audio/mpeg",
+        buffer: Buffer.from("invalid"),
+      },
+      ...files,
+    ]);
+  await panel.getByRole("button", { name: "开始批量导入" }).click();
+  await expect(panel.getByRole("status")).toHaveText("已导入 2 / 3 首");
+  await expect(panel.getByText("导入失败", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByText("已创建草稿：批量 M4A 标签", { exact: true }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "编辑草稿" }).first().click();
+  await expect(page.getByRole("textbox", { name: "作品名称" })).toHaveValue(
+    "批量 MP3 标签",
+  );
+  await expect(page.getByRole("textbox", { name: "作品简介" })).toHaveValue(
+    /批量艺术家/,
+  );
+});
 test("播放不中断、筛选、收藏、队列、刷新恢复和手机布局", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
