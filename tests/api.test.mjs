@@ -5,6 +5,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { EventEmitter } from "node:events";
 import { wav, document } from "./helpers.mjs";
 await mkdir("artifacts", { recursive: true });
 process.env.DATA_DIR = await mkdtemp(path.resolve("artifacts/api-"));
@@ -13,7 +16,8 @@ process.env.NODE_ENV = "test";
 process.env.STORAGE_DRIVER = "local";
 process.env.SITE_ORIGIN = "http://localhost";
 const { app } = await import("../server/index.mjs");
-const { db } = await import("../server/db.mjs");
+const { db, saveTrack, getTrack } = await import("../server/db.mjs");
+const { enqueue, trackDir } = await import("../server/media.mjs");
 const { setPassword } = await import("../server/security.mjs");
 await setPassword("test-only-long-password");
 const server = app.listen(0, "127.0.0.1");
@@ -284,6 +288,72 @@ test("完整上传发布流程、权限隔离、范围请求、统计、下架�
       0,
     );
   });
+  await t.test(
+    "排队草稿可取消并删除，处理中不可删除，队列不再处理已删除作品",
+    async (t) => {
+      const blocker = {
+        ...document,
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        status: "draft",
+        processing: "queued",
+      };
+      const queued = { ...blocker, id: randomUUID() };
+      for (const track of [blocker, queued]) {
+        saveTrack(track);
+        await mkdir(trackDir(track.id), { recursive: true });
+        await writeFile(path.join(trackDir(track.id), "original"), wav(2));
+      }
+      const originalSpawn = childProcess.spawn;
+      const gate = new EventEmitter();
+      gate.stdout = new EventEmitter();
+      gate.stderr = new EventEmitter();
+      gate.kill = () => true;
+      let intercepted = false;
+      t.mock.method(childProcess, "spawn", (program, args, options) => {
+        if (
+          !intercepted &&
+          args.includes(path.join(trackDir(blocker.id), "original"))
+        ) {
+          intercepted = true;
+          return gate;
+        }
+        return originalSpawn(program, args, options);
+      });
+      syncBuiltinESMExports();
+      try {
+        enqueue(blocker.id);
+        enqueue(queued.id);
+        assert.equal(getTrack(blocker.id).processing, "processing");
+        assert.equal(getTrack(queued.id).processing, "queued");
+        assert.equal(
+          (await request(`/api/admin/tracks/${blocker.id}`, "DELETE")).status,
+          409,
+        );
+        assert.equal(
+          (await request(`/api/admin/tracks/${queued.id}`, "DELETE")).status,
+          200,
+        );
+        assert.equal(getTrack(queued.id), null);
+        assert.equal(await stat(trackDir(queued.id)).catch(() => null), null);
+      } finally {
+        childProcess.spawn.mock.restore();
+        syncBuiltinESMExports();
+        gate.stdout.emit(
+          "data",
+          JSON.stringify({
+            format: { duration: 2 },
+            streams: [{ codec_type: "audio" }],
+          }),
+        );
+        gate.emit("close", 0);
+      }
+      await ready(blocker.id);
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(getTrack(queued.id), null);
+      assert.equal(await stat(trackDir(queued.id)).catch(() => null), null);
+    },
+  );
   await t.test("退出后后台访问被拒绝", async () => {
     assert.equal((await request("/api/admin/logout", "POST")).status, 204);
     assert.equal((await request("/api/admin/catalog")).status, 401);

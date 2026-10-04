@@ -28,6 +28,7 @@ import {
 import {
   ingest,
   enqueue,
+  cancelQueued,
   publishMedia,
   unpublishMedia,
   sendMedia,
@@ -296,6 +297,7 @@ app.post(
           originalName: req.file.originalname,
         };
         saveTrack(created);
+        uploading.add(created.id);
         await ingest(created.id, req.file.path);
         res.status(201).json(created);
       } catch (error) {
@@ -310,6 +312,7 @@ app.post(
         if (error instanceof multer.MulterError) return next(error);
         res.status(400).json({ error: error.message || "无法读取音频信息" });
       } finally {
+        if (created) uploading.delete(created.id);
         activeImports.delete(importId);
         if (req.file) await rm(req.file.path, { force: true });
       }
@@ -381,6 +384,8 @@ app.post("/api/admin/tracks/:id/upload", (req, res, next) => {
 app.post("/api/admin/tracks/:id/retry", (req, res) => {
   const t = getTrack(req.params.id);
   if (!t) return res.status(404).json({ error: "作品不存在" });
+  if (transitions.has(t.id) || uploading.has(t.id))
+    return res.status(409).json({ error: "作品正在变更，请稍后重试" });
   if (t.status === "published" || !["failed", "empty"].includes(t.processing))
     return res.status(409).json({ error: "当前状态不可重试" });
   saveTrack({ ...t, processing: "queued" });
@@ -406,10 +411,11 @@ app.delete("/api/admin/tracks/:id", async (req, res) => {
   if (
     transitions.has(t.id) ||
     uploading.has(t.id) ||
-    ["queued", "processing"].includes(t.processing)
+    t.processing === "processing"
   )
     return res.status(409).json({ error: "作品正在处理，请稍后删除" });
   transitions.add(t.id);
+  cancelQueued(t.id);
   try {
     await deleteDraftMedia(t.id);
     for (const list of allPlaylists())
@@ -421,6 +427,13 @@ app.delete("/api/admin/tracks/:id", async (req, res) => {
     db.prepare("DELETE FROM events WHERE track_id=?").run(t.id);
     db.prepare("DELETE FROM tracks WHERE id=?").run(t.id);
     res.json({ ok: true });
+  } catch (error) {
+    saveTrack({
+      ...t,
+      processing: "failed",
+      processingError: "删除未完成，请重试删除或重新上传音频",
+    });
+    throw error;
   } finally {
     transitions.delete(t.id);
   }

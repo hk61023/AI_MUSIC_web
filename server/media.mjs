@@ -47,6 +47,10 @@ export function enqueue(id) {
   if (!queue.includes(id)) queue.push(id);
   void drain();
 }
+export function cancelQueued(id) {
+  const index = queue.indexOf(id);
+  if (index >= 0) queue.splice(index, 1);
+}
 async function drain() {
   if (busy) return;
   busy = true;
@@ -163,6 +167,7 @@ async function processTrack(id) {
     // Production media is durable in GCS; local workspace is only a processing spool.
     if (bucket) await rm(trackDir(id), { recursive: true, force: true });
     t = getTrack(id);
+    if (!t) return;
     saveTrack({
       ...t,
       duration,
@@ -173,6 +178,7 @@ async function processTrack(id) {
     });
   } catch (error) {
     t = getTrack(id);
+    if (!t) return;
     saveTrack({ ...t, processing: "failed", processingError: error.message });
   }
 }
