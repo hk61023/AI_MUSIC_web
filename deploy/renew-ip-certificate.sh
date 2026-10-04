@@ -20,4 +20,3 @@ if [ -n "${CERT_EMAIL:-}" ]; then contact=(--email "$CERT_EMAIL"); fi
   --path /etc/tingyu-tls --domains "$CERT_IP" \
   --profile shortlived --tls --renew-force --no-random-sleep
 openssl x509 -in "$cert" -noout -issuer -dates -ext subjectAltName
-

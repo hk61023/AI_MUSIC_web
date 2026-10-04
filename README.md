@@ -69,4 +69,3 @@ node scripts/restore.mjs data/backups/你的备份.sqlite data-restored
 
 恢复元数据不复制本地媒体；开发环境需另备份 `data/private/`，生产媒体在 GCS 中。上线恢复时停止服务，检查 `DATA_DIR`、管理员会话、GCS 文件和作品发布状态后切换；不要直接覆盖正在使用的数据库。
 
-

@@ -41,4 +41,3 @@ systemctl daemon-reload
 systemctl enable --now tingyu.service
 curl -fsS --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:8787/api/health
 printf '\nRELEASE_READY=%s\n' "$release"
-

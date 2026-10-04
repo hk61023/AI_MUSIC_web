@@ -19,4 +19,3 @@ try {
 } finally {
   await Promise.all([source.delete({ ignoreNotFound: true }), published.delete({ ignoreNotFound: true })]);
 }
-

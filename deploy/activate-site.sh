@@ -13,4 +13,3 @@ curl -fsS "$SITE_ORIGIN/api/catalog"
 nginx -t
 systemctl is-active tingyu nginx
 systemctl list-timers tingyu-backup.timer tingyu-tls.timer --no-pager
-
