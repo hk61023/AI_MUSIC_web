@@ -755,8 +755,8 @@ export default function Admin({ refresh }: { refresh: () => void }) {
                 音频与封面
               </h3>
               <p>
-                音频最多 100 MB、20 分钟。会转换为 192 kbps MP3
-                并调整响度；请在发布前试听检查。
+                音频最多 100 MB、20
+                分钟。原样保存和播放，不重编码、不调整响度；请在发布前试听并检查目标浏览器是否支持该格式。
               </p>
               <div key={uploadKey} className="form-grid">
                 <label>
@@ -877,7 +877,7 @@ export default function Admin({ refresh }: { refresh: () => void }) {
                   checked={form.downloadAllowed}
                   onChange={(e) => field("downloadAllowed", e.target.checked)}
                 />
-                开放 MP3 下载
+                开放原格式下载
               </label>
             </div>
             <div className="editor-actions">

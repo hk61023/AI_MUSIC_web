@@ -1,8 +1,9 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { document } from "./helpers.mjs";
+import { document, wav } from "./helpers.mjs";
 await mkdir("artifacts", { recursive: true });
 process.env.DATA_DIR = await mkdtemp(path.resolve("artifacts/storage-"));
 process.env.STORAGE_DRIVER = "gcs";
@@ -10,8 +11,8 @@ process.env.GCS_BUCKET = "isolated-test-bucket";
 process.env.NODE_ENV = "test";
 process.env.NO_LISTEN = "1";
 process.env.SITE_ORIGIN = "http://localhost";
-const { cloudStorage } = await import("../server/media.mjs");
-const { saveTrack, db } = await import("../server/db.mjs");
+const { cloudStorage, ingest } = await import("../server/media.mjs");
+const { saveTrack, getTrack, db } = await import("../server/db.mjs");
 const { setPassword } = await import("../server/security.mjs");
 const { app } = await import("../server/index.mjs");
 await setPassword("cloud-branch-test-only");
@@ -24,6 +25,9 @@ let failCopy = false,
   failDelete = false;
 cloudStorage.file = (key) => ({
   name: key,
+  async exists() {
+    return [objects.has(key)];
+  },
   async copy(target) {
     if (failCopy) throw new Error("simulated copy failure");
     assert.ok(objects.has(key));
@@ -44,6 +48,15 @@ cloudStorage.file = (key) => ({
     ];
   },
 });
+cloudStorage.upload = async (file, options) => {
+  operations.push([
+    "upload",
+    options.destination,
+    Buffer.from(await readFile(file)),
+    options.metadata,
+  ]);
+  objects.add(options.destination);
+};
 saveTrack({
   ...document,
   id: "test-cloud",
@@ -53,6 +66,72 @@ saveTrack({
   duration: 60,
   hasCover: true,
   artwork: "violet",
+});
+test("原始音频逐字节保留，GCS 仅一份，发布不复制，下架仍私有，原格式下载", async () => {
+  const id = randomUUID();
+  const source = path.join(process.env.DATA_DIR, "raw-fixture.wav");
+  const original = wav(2);
+  await writeFile(source, original);
+  saveTrack({
+    ...document,
+    id,
+    createdAt: new Date().toISOString(),
+    status: "draft",
+    processing: "queued",
+    hasCover: false,
+    downloadAllowed: true,
+    rightsConfirmed: true,
+    rightsEvidence: "本地合成测试",
+    licenseText: "仅用于测试",
+  });
+  const start = operations.length;
+  await ingest(id, source);
+  for (let i = 0; i < 150 && getTrack(id).processing !== "ready"; i++) {
+    assert.notEqual(getTrack(id).processing, "failed");
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.equal(getTrack(id).processing, "ready");
+  const upload = operations.slice(start).filter((op) => op[0] === "upload");
+  assert.equal(upload.length, 1);
+  assert.equal(upload[0][1], `private/${id}/original`);
+  assert.deepEqual(upload[0][2], original);
+  assert.equal(upload[0][3].contentType, "audio/wav");
+  assert.equal((await change(`/api/admin/tracks/${id}/publish`)).status, 200);
+  const playback = await fetch(origin + `/media/${id}/audio`, {
+    redirect: "manual",
+  });
+  assert.match(
+    playback.headers.get("location"),
+    new RegExp(`private/${id}/original`),
+  );
+  const download = await fetch(origin + `/api/tracks/${id}/download`, {
+    redirect: "manual",
+  });
+  assert.equal(download.status, 302);
+  assert.ok(
+    operations.some(
+      (op) =>
+        op[0] === "sign" &&
+        op[1] === `private/${id}/original` &&
+        op[2].responseDisposition?.endsWith('.wav"'),
+    ),
+  );
+  assert.equal(
+    operations.slice(start).filter((op) => op[0] === "copy").length,
+    0,
+  );
+  assert.equal((await change(`/api/admin/tracks/${id}/unpublish`)).status, 200);
+  assert.equal(
+    (await fetch(origin + `/media/${id}/audio`, { redirect: "manual" })).status,
+    404,
+  );
+  assert.ok(objects.has(`private/${id}/original`));
+  const removed = await fetch(origin + `/api/admin/tracks/${id}`, {
+    method: "DELETE",
+    headers: { Origin: "http://localhost", Cookie: cookie },
+  });
+  assert.equal(removed.status, 200);
+  assert.ok(!objects.has(`private/${id}/original`));
 });
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));

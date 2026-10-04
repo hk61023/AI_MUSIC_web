@@ -81,9 +81,11 @@ test("MP3／M4A 标签读取、AAC／ALAC、重试去重及失败隔离", async 
     "lyrics=第一行\n第二行",
   ]);
   const importId = randomUUID();
+  const originals = [];
   const response = await upload(tagged, "filename.mp3", true, importId);
   assert.equal(response.status, 201);
   const track = await response.json();
+  originals.push([track.id, tagged, "audio/mpeg"]);
   assert.equal(track.title, "月光 <script>");
   assert.match(track.description, /艺术家：测试艺术家/);
   assert.match(track.description, /专辑：夜航/);
@@ -115,6 +117,7 @@ test("MP3／M4A 标签读取、AAC／ALAC、重试去重及失败隔离", async 
     const response = await upload(encoded, `${codec}.m4a`);
     assert.equal(response.status, 201);
     const imported = await response.json();
+    originals.push([imported.id, encoded, "audio/mp4"]);
     assert.equal(imported.title, "M4A 夜航");
     assert.match(imported.description, /M4A 艺术家/);
     assert.match(imported.description, new RegExp(codec.toUpperCase()));
@@ -137,6 +140,14 @@ test("MP3／M4A 标签读取、AAC／ALAC、重试去重及失败隔离", async 
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.ok(allTracks().every((t) => t.processing === "ready"));
+  for (const [id, original, mime] of originals) {
+    const result = await fetch(base + `/api/admin/tracks/${id}/preview/audio`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(result.status, 200);
+    assert.match(result.headers.get("content-type"), new RegExp(mime));
+    assert.deepEqual(Buffer.from(await result.arrayBuffer()), original);
+  }
   const image = path.join(process.env.DATA_DIR, "fixture.jpg");
   const coverResult = spawnSync(
     process.env.FFMPEG_PATH || "ffmpeg",

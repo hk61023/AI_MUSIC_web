@@ -57,7 +57,7 @@ async function ready(id) {
     if (t.processing === "failed") throw new Error(t.processingError);
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error("转码超时");
+  throw new Error("音频检查超时");
 }
 after(async () => {
   server.closeAllConnections();
@@ -123,7 +123,7 @@ test("完整上传发布流程、权限隔离、范围请求、统计、下架�
       409,
     );
   });
-  await t.test("实际解码失败可重新上传；转码完成可预览", async () => {
+  await t.test("格式校验失败可重新上传；原格式音频可预览", async () => {
     let body = new FormData();
     body.append("audio", new Blob(["invalid-audio"]), "bad.wav");
     assert.equal(
@@ -145,7 +145,8 @@ test("完整上传发布流程、权限隔离、范围请求、统计、下架�
     assert.ok(track.duration >= 2.9);
     const preview = await request(`/api/admin/tracks/${id}/preview/audio`);
     assert.equal(preview.status, 200);
-    assert.match(preview.headers.get("content-type"), /audio\/mpeg/);
+    assert.match(preview.headers.get("content-type"), /audio\/wav/);
+    assert.deepEqual(Buffer.from(await preview.arrayBuffer()), wav());
     assert.equal(
       (
         await request(
@@ -342,8 +343,8 @@ test("完整上传发布流程、权限隔离、范围请求、统计、下架�
         gate.stdout.emit(
           "data",
           JSON.stringify({
-            format: { duration: 2 },
-            streams: [{ codec_type: "audio" }],
+            format: { duration: 2, format_name: "wav" },
+            streams: [{ codec_type: "audio", codec_name: "pcm_s16le" }],
           }),
         );
         gate.emit("close", 0);
