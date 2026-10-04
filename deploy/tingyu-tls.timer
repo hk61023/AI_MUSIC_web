@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Tingyu IP certificate every six hours
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=6h
+RandomizedDelaySec=10m
+Persistent=true
+[Install]
+WantedBy=timers.target

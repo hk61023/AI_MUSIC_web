@@ -51,7 +51,7 @@ npm.cmd run test:browser
 
 ## 部署与尚需实测的项目
 
-Google Cloud 项目为 **aimisic**，完整配置见 [部署文档](deploy/GOOGLE_CLOUD.md)。生产环境必须使用 GCS；本地文件驱动只用于开发。
+Google Cloud 完整配置见 [部署文档](deploy/GOOGLE_CLOUD.md)。生产环境必须使用 GCS；本地文件驱动只用于开发。
 
 SEO：构建时预生成公开作品页、sitemap 和 robots；运行时作品页再次核验发布状态并输出最新标题、介绍与 Open Graph 信息。更新内容不必重新构建前端；sitemap 在服务端动态输出。作品 ID 链接不会随标题改变。
 
@@ -68,4 +68,5 @@ node scripts/restore.mjs data/backups/你的备份.sqlite data-restored
 ```
 
 恢复元数据不复制本地媒体；开发环境需另备份 `data/private/`，生产媒体在 GCS 中。上线恢复时停止服务，检查 `DATA_DIR`、管理员会话、GCS 文件和作品发布状态后切换；不要直接覆盖正在使用的数据库。
+
 

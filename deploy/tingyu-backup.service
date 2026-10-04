@@ -1,0 +1,15 @@
+[Unit]
+Description=Back up Tingyu SQLite to private GCS
+[Service]
+Type=oneshot
+User=tingyu
+Group=tingyu
+WorkingDirectory=/opt/tingyu/current
+EnvironmentFile=/etc/tingyu.env
+ExecStart=/usr/bin/node scripts/backup.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tingyu
+UMask=0077

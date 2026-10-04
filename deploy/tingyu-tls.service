@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Tingyu short-lived IP HTTPS certificate
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tingyu-renew-ip-certificate
+TimeoutStartSec=240
