@@ -35,9 +35,17 @@ if [ ! -f /var/lib/tingyu/music.sqlite ]; then
   openssl rand -base64 30 > /etc/tingyu-admin-initial-password
   sudo -u tingyu env DATA_DIR=/var/lib/tingyu node scripts/admin.mjs --password-stdin < /etc/tingyu-admin-initial-password
 fi
+previous=$(readlink /opt/tingyu/current || true)
 ln -sfn "$release" /opt/tingyu/current
 install -m 644 deploy/tingyu.service deploy/tingyu-backup.service deploy/tingyu-backup.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now tingyu.service
-curl -fsS --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:8787/api/health
+systemctl enable tingyu.service
+if ! systemctl restart tingyu.service || ! curl -fsS --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:8787/api/health; then
+  if [ -n "$previous" ]; then
+    ln -sfn "$previous" /opt/tingyu/current
+    systemctl restart tingyu.service
+  fi
+  echo 'Release failed; previous code restored when available.' >&2
+  exit 1
+fi
 printf '\nRELEASE_READY=%s\n' "$release"
