@@ -45,6 +45,7 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
     .getByRole("textbox", { name: "管理员密码" })
     .fill("browser-test-only-password");
   await page.getByRole("button", { name: "进入管理后台" }).click();
+  await page.getByRole("button", { name: "批量导入", exact: true }).click();
   const panel = page.getByRole("region", { name: "批量导入 MP3／M4A" });
   await panel.getByLabel("选择多个 MP3／M4A 文件").setInputFiles([
     {
@@ -67,6 +68,7 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
   await expect(page.getByRole("textbox", { name: "作品简介" })).toHaveValue(
     /批量艺术家/,
   );
+  await page.getByRole("button", { name: "关闭作品编辑面板" }).click();
   await expect
     .poll(async () => {
       const catalog = await (
@@ -84,11 +86,54 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
   await page
     .getByRole("checkbox", { name: "选择作品 批量 M4A 标签", exact: true })
     .check();
+  const importedCatalog = await (
+    await page.request.get("/api/admin/catalog")
+  ).json();
+  const failedId = importedCatalog.tracks.find(
+    (t: { title: string }) => t.title === "批量 M4A 标签",
+  ).id;
+  const publishPattern = `**/api/admin/tracks/${failedId}/publish`;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(publishPattern, async (route) => {
+    await gate;
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "验收模拟：请核对作品许可" }),
+    });
+  });
   await page
     .getByRole("button", { name: "批量发布（2）", exact: true })
     .click();
   await expect(
-    page.getByRole("status").filter({ hasText: "已发布 2 首作品" }),
+    page.getByRole("button", { name: /^已发布作品（/ }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("textbox", { name: "搜索后台作品" }),
+  ).toBeDisabled();
+  release();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已发布 1 首作品" }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("验收模拟");
+  await expect(
+    page.getByRole("checkbox", { name: "选择作品 批量 M4A 标签", exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "选择作品 批量 MP3 标签", exact: true }),
+  ).toHaveCount(0);
+  await page.unroute(publishPattern);
+  await page
+    .getByRole("button", { name: "批量发布（1）", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "批量发布（1）", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("status").filter({ hasText: "已发布 1 首作品" }),
   ).toBeVisible();
   const published = await (await page.request.get("/api/catalog")).json();
   expect(
@@ -228,6 +273,7 @@ test("后台创建、上传、预览、发布、编辑歌单和下架", async ({
     .fill("browser-test-only-password");
   await page.getByRole("button", { name: "进入管理后台" }).click();
   await expect(page.getByRole("button", { name: "新建作品" })).toBeVisible();
+  await page.getByRole("button", { name: "新建作品", exact: true }).click();
   await page.getByRole("textbox", { name: "作品名称" }).fill("浏览器上传作品");
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(page.getByRole("status")).toContainText("已保存");
@@ -273,7 +319,10 @@ test("后台创建、上传、预览、发布、编辑歌单和下架", async ({
     .check();
   await page.getByRole("button", { name: "保存歌单" }).click();
   await expect(page.getByRole("status")).toContainText("已保存");
-  await page.getByRole("button", { name: "作品管理", exact: true }).click();
+  await page.getByRole("button", { name: /^已发布作品（/ }).click();
+  await page
+    .getByRole("button", { name: "编辑 浏览器上传作品", exact: true })
+    .click();
   await page.getByRole("button", { name: "下架作品", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("已下架");
   expect((await page.request.get(`/media/${t.id}/audio`)).status()).toBe(404);

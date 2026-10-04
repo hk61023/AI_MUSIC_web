@@ -20,6 +20,7 @@ export type Track = {
   status: "draft" | "published";
   processing: "empty" | "queued" | "processing" | "ready" | "failed";
   processingError?: string;
+  originalName?: string;
   duration: number;
   mediaVersion?: number;
   hasCover: boolean;

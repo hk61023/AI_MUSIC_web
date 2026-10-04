@@ -14,6 +14,8 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { api, type Track, type Catalog, type Playlist, time } from "./types";
+import AdminWorks from "./AdminWorks";
+import AdminDrawer from "./AdminDrawer";
 type Editable = Pick<
   Track,
   | "title"
@@ -85,7 +87,13 @@ export default function Admin({ refresh }: { refresh: () => void }) {
     [stats, setStats] = useState<{ counts: { kind: string; count: number }[] }>(
       { counts: [] },
     ),
-    [tab, setTab] = useState("tracks");
+    [tab, setTab] = useState("drafts");
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [previewFocus, setPreviewFocus] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [batchIds, setBatchIds] = useState<string[]>([]);
+  const [batchOnly, setBatchOnly] = useState(false);
+  const baseline = useRef(JSON.stringify(blank));
   const [listId, setListId] = useState(""),
     [list, setList] = useState<Omit<Playlist, "id">>({
       title: "",
@@ -121,7 +129,7 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       try {
         await api(`/api/admin/tracks/${id}`, { method: "DELETE" });
         deleted++;
-        if (selected === id) choose();
+        if (selected === id) setEditorOpen(false);
         setImports((old) => old.filter((r) => r.id !== id));
       } catch (e) {
         failedIds.push(id);
@@ -194,6 +202,9 @@ export default function Admin({ refresh }: { refresh: () => void }) {
             body,
             headers: { "X-Import-ID": row.importId },
           });
+          setBatchIds((old) => [...new Set([...old, track.id])]);
+          setBatchOnly(true);
+          setCheckedTracks([]);
           setImports((old) =>
             old.map((r, j) =>
               j === i
@@ -249,6 +260,14 @@ export default function Admin({ refresh }: { refresh: () => void }) {
     );
     return () => clearInterval(timer);
   }, [session?.authenticated]);
+  useEffect(() => {
+    setCheckedTracks((old) => {
+      const valid = old.filter((id) =>
+        catalog.tracks.some((t) => t.id === id && t.status === "draft"),
+      );
+      return valid.length === old.length ? old : valid;
+    });
+  }, [catalog.tracks]);
   const run = async (action: () => Promise<void>, success = "已保存") => {
     setBusy(true);
     setError("");
@@ -323,14 +342,35 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       </section>
     );
   const current = catalog.tracks.find((t) => t.id === selected);
-  const choose = (t?: Track) => {
+  const choose = (t?: Track, preview = false) => {
     setSelected(t?.id || null);
-    setForm(t ? edit(t) : { ...blank });
+    const next = t ? edit(t) : { ...blank };
+    setForm(next);
+    baseline.current = JSON.stringify(next);
+    setPreviewFocus(preview);
+    setEditorOpen(true);
     setAudio(null);
     setCover(null);
     setUploadKey((x) => x + 1);
     setError("");
     setMessage("");
+  };
+  const closeEditor = () => {
+    if (busy || importing) return;
+    if (
+      (JSON.stringify(form) !== baseline.current || audio || cover) &&
+      !window.confirm("有未保存的修改或待上传文件，确定放弃并关闭？")
+    )
+      return;
+    setEditorOpen(false);
+    if (selected && batchOnly && !batchIds.includes(selected)) {
+      setBatchOnly(false);
+      setCheckedTracks([]);
+    }
+  };
+  const switchTab = (next: string) => {
+    setTab(next);
+    setCheckedTracks([]);
   };
   const field = <K extends keyof Editable>(key: K, value: Editable[K]) =>
     setForm((old) => ({ ...old, [key]: value }));
@@ -340,6 +380,8 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       { method: selected ? "PUT" : "POST", body: JSON.stringify(form) },
     );
     setSelected(t.id);
+    setForm(edit(t));
+    baseline.current = JSON.stringify(edit(t));
     return t;
   };
   const upload = () =>
@@ -374,6 +416,19 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       if (at >= 0 && at < arr.length) [arr[i], arr[at]] = [arr[at], arr[i]];
       return { ...old, trackIds: arr };
     });
+  const unpublish = (t: Track) => {
+    if (
+      editorOpen &&
+      (JSON.stringify(form) !== baseline.current || audio || cover) &&
+      !window.confirm("有未保存的修改，确定放弃修改并下架作品？")
+    )
+      return Promise.resolve();
+    return run(async () => {
+      await api(`/api/admin/tracks/${t.id}/unpublish`, { method: "POST" });
+      setEditorOpen(false);
+      setBatchOnly(false);
+    }, "已下架，作品已移至草稿，新的播放与下载请求已关闭");
+  };
   return (
     <>
       <div className="admin-heading">
@@ -413,28 +468,61 @@ export default function Admin({ refresh }: { refresh: () => void }) {
           </div>
         ))}
       </div>
-      <div className="admin-tabs">
-        <button
-          className={tab === "tracks" ? "active" : ""}
-          onClick={() => setTab("tracks")}
-        >
-          作品管理
-        </button>
-        <button
-          className={tab === "lists" ? "active" : ""}
-          onClick={() => setTab("lists")}
-        >
-          歌单管理
-        </button>
+      <div className="admin-tabs" aria-label="后台分类">
+        {[
+          [
+            "drafts",
+            "草稿与导入",
+            catalog.tracks.filter((t) => t.status === "draft").length,
+          ],
+          [
+            "published",
+            "已发布作品",
+            catalog.tracks.filter((t) => t.status === "published").length,
+          ],
+          ["lists", "歌单管理", null],
+        ].map(([value, label, count]) => (
+          <button
+            key={value}
+            data-admin-tab
+            className={tab === value ? "active" : ""}
+            disabled={busy || importing}
+            aria-pressed={tab === value}
+            onClick={() => switchTab(String(value))}
+          >
+            {label}
+            {count !== null ? "（" + count + "）" : ""}
+          </button>
+        ))}
       </div>
-      {tab === "tracks" && (
+      {tab === "drafts" && (
+        <div className="works-top-actions">
+          <button
+            className="primary"
+            disabled={busy || importing}
+            aria-expanded={showImport}
+            onClick={() => setShowImport(!showImport)}
+          >
+            {showImport ? "收起批量导入" : "批量导入"}
+          </button>
+          <button
+            className="secondary"
+            disabled={busy || importing}
+            onClick={() => choose()}
+          >
+            <Plus size={16} />
+            新建作品
+          </button>
+        </div>
+      )}
+      {tab === "drafts" && showImport && (
         <section
           className="batch-import upload-panel"
           aria-label="批量导入 MP3／M4A"
         >
           <h2>批量导入 MP3／M4A</h2>
           <p>
-            读取文件内的标题、艺术家、专辑、发行时间、风格、备注和歌词，自动填写草稿。没有标题标签时使用文件名。
+            读取文件内的标题、艺术家、专辑、文件日期标签、风格、备注和歌词，自动填写草稿。没有标题标签时使用文件名。
           </p>
           <p>
             每批最多 50 首，每首最多 100 MB、20
@@ -462,6 +550,9 @@ export default function Admin({ refresh }: { refresh: () => void }) {
                   return;
                 }
                 setError("");
+                setBatchIds([]);
+                setBatchOnly(false);
+                setCheckedTracks([]);
                 setImports(
                   files.map((file) => ({
                     file,
@@ -516,417 +607,377 @@ export default function Admin({ refresh }: { refresh: () => void }) {
                     }
                   </span>
                   {r.detail && <small>{r.detail}</small>}
-                  {r.id && (
-                    <button
-                      className="secondary"
-                      disabled={importing}
-                      onClick={() =>
-                        choose(catalog.tracks.find((t) => t.id === r.id))
-                      }
-                    >
-                      编辑草稿
-                    </button>
-                  )}
+                  {r.id &&
+                    catalog.tracks.some(
+                      (t) => t.id === r.id && t.status === "draft",
+                    ) && (
+                      <button
+                        className="secondary"
+                        disabled={importing}
+                        onClick={() =>
+                          choose(catalog.tracks.find((t) => t.id === r.id))
+                        }
+                      >
+                        编辑草稿
+                      </button>
+                    )}
                 </li>
               ))}
             </ul>
           )}
         </section>
       )}
-      {error ? (
+      {error && !editorOpen ? (
         <div className="banner form-error" role="alert">
           {error}
         </div>
       ) : null}
-      {message ? (
+      {message && !editorOpen ? (
         <div className="banner success" role="status">
           <Check size={17} />
           {message}
         </div>
       ) : null}
-      {tab === "tracks" ? (
-        <div className="admin-layout">
-          <aside className="admin-track-list">
-            <button
-              className="secondary"
-              disabled={busy || importing || !checkedTracks.length}
-              onClick={deleteChecked}
-            >
-              批量删除草稿（{checkedTracks.length}）
-            </button>
-            <label>
-              <input
-                type="checkbox"
-                disabled={busy || importing}
-                checked={
-                  catalog.tracks.some((t) => t.status === "draft") &&
-                  catalog.tracks
-                    .filter((t) => t.status === "draft")
-                    .every((t) => checkedTracks.includes(t.id))
-                }
-                onChange={(e) =>
-                  setCheckedTracks(
-                    e.target.checked
-                      ? catalog.tracks
-                          .filter((t) => t.status === "draft")
-                          .map((t) => t.id)
-                      : [],
-                  )
-                }
-              />
-              全选草稿
-            </label>
-            <button
-              className="secondary"
-              disabled={busy || importing || !checkedTracks.length}
-              onClick={publishChecked}
-            >
-              批量发布（{checkedTracks.length}）
-            </button>
-            <small>
-              请先逐首确认来源与许可；未处理完成或信息不完整的作品会保留为草稿。
-            </small>
-            <button className="secondary" onClick={() => choose()}>
-              <Plus size={16} />
-              新建作品
-            </button>
-            {catalog.tracks.map((t) => (
-              <div key={t.id}>
-                {t.status === "draft" && (
-                  <label>
-                    <input
-                      type="checkbox"
-                      aria-label={`选择作品 ${t.title}`}
-                      disabled={busy || importing}
-                      checked={checkedTracks.includes(t.id)}
-                      onChange={(e) =>
-                        setCheckedTracks((old) =>
-                          e.target.checked
-                            ? [...old, t.id]
-                            : old.filter((id) => id !== t.id),
-                        )
-                      }
-                    />
-                    选择
-                  </label>
-                )}
-                <button
-                  key={t.id}
-                  className={selected === t.id ? "active" : ""}
-                  onClick={() => choose(t)}
-                >
-                  <Music2 size={18} />
-                  <span>
-                    {t.title}
-                    <small>
-                      {t.status === "published" ? "已发布" : "草稿"} ·{" "}
-                      {statuses[t.processing]}
-                    </small>
-                  </span>
-                </button>
+      {tab !== "lists" ? (
+        <>
+          <AdminWorks
+            key={tab}
+            tracks={catalog.tracks}
+            published={tab === "published"}
+            locked={busy || importing}
+            batchIds={batchIds}
+            batchOnly={batchOnly}
+            onBatchOnly={setBatchOnly}
+            checked={checkedTracks}
+            onChecked={setCheckedTracks}
+            onEdit={choose}
+            onPublish={() => void publishChecked()}
+            onDelete={() => void deleteChecked()}
+            onFeatured={(t) =>
+              void run(
+                async () => {
+                  await api("/api/admin/tracks/" + t.id, {
+                    method: "PUT",
+                    body: JSON.stringify({ ...edit(t), featured: !t.featured }),
+                  });
+                },
+                t.featured ? "已取消精选" : "已设为精选",
+              )
+            }
+            onUnpublish={(t) => void unpublish(t)}
+          />
+          <AdminDrawer
+            open={editorOpen}
+            locked={busy || importing}
+            preview={previewFocus}
+            onRequestClose={closeEditor}
+          >
+            {error && (
+              <div className="banner form-error" role="alert">
+                {error}
               </div>
-            ))}
-          </aside>
-          <section className="editor">
-            <header>
-              <h2>{current ? "编辑作品" : "新建作品"}</h2>
-              <span
-                className={`status-pill ${current?.status === "published" ? "published" : ""}`}
-              >
-                {current?.status === "published" ? "已发布" : "草稿"}
-              </span>
-            </header>
-            <div className="form-grid">
-              <label className="wide">
-                作品名称
-                <input
-                  aria-label="作品名称"
-                  value={form.title}
-                  maxLength={100}
-                  onChange={(e) => field("title", e.target.value)}
-                  required
-                />
-              </label>
-              <label className="wide">
-                作品简介
-                <textarea
-                  value={form.description}
-                  maxLength={500}
-                  onChange={(e) => field("description", e.target.value)}
-                />
-              </label>
-              <label>
-                风格
-                <input
-                  value={form.genre}
-                  maxLength={40}
-                  onChange={(e) => field("genre", e.target.value)}
-                />
-              </label>
-              <label>
-                情绪
-                <input
-                  value={form.mood}
-                  maxLength={40}
-                  onChange={(e) => field("mood", e.target.value)}
-                />
-              </label>
-              <label>
-                生成工具
-                <select
-                  value={form.source}
-                  onChange={(e) => field("source", e.target.value)}
+            )}
+            {message && (
+              <div className="banner success" role="status">
+                {message}
+              </div>
+            )}
+            <section className="editor">
+              <header>
+                <h2>{current ? "编辑作品" : "新建作品"}</h2>
+                <span
+                  className={`status-pill ${current?.status === "published" ? "published" : ""}`}
                 >
-                  {["MusicFX", "Flow Music", "其他", "本地合成样例"].map(
-                    (x) => (
-                      <option key={x}>{x}</option>
-                    ),
-                  )}
-                </select>
-              </label>
-              <label>
-                生成日期
-                <input
-                  type="date"
-                  value={form.generatedAt}
-                  onChange={(e) => field("generatedAt", e.target.value)}
-                />
-              </label>
-              <label>
-                类型
-                <select
-                  value={form.vocal}
-                  onChange={(e) =>
-                    field("vocal", e.target.value as Editable["vocal"])
-                  }
-                >
-                  <option value="instrumental">纯音乐</option>
-                  <option value="vocal">人声</option>
-                </select>
-              </label>
-              <label>
-                标签（逗号分隔）
-                <input
-                  value={form.tags.join(",")}
-                  onChange={(e) =>
-                    field(
-                      "tags",
-                      e.target.value.split(/[,，]/).map((x) => x.trim()),
-                    )
-                  }
-                />
-              </label>
-              <label className="wide">
-                创作故事
-                <textarea
-                  value={form.story}
-                  onChange={(e) => field("story", e.target.value)}
-                />
-              </label>
-              <details className="wide">
-                <summary>歌词与提示词（可选）</summary>
-                <label>
-                  歌词
-                  <textarea
-                    value={form.lyrics}
-                    onChange={(e) => field("lyrics", e.target.value)}
-                  />
-                </label>
-                <label>
-                  提示词
-                  <textarea
-                    value={form.prompt}
-                    onChange={(e) => field("prompt", e.target.value)}
-                  />
-                </label>
-              </details>
-              <label className="check-label wide">
-                <input
-                  type="checkbox"
-                  checked={form.featured}
-                  onChange={(e) => field("featured", e.target.checked)}
-                />
-                设为首页精选
-              </label>
-            </div>
-            <div className="upload-panel">
-              <h3>
-                <Upload size={18} />
-                音频与封面
-              </h3>
-              <p>
-                音频最多 100 MB、20
-                分钟。原样保存和播放，不重编码、不调整响度；请在发布前试听并检查目标浏览器是否支持该格式。
-              </p>
-              <div key={uploadKey} className="form-grid">
-                <label>
-                  音频文件
+                  {current?.status === "published" ? "已发布" : "草稿"}
+                </span>
+              </header>
+              <div className="form-grid">
+                <label className="wide">
+                  作品名称
                   <input
-                    aria-label="音频文件"
-                    type="file"
-                    accept=".mp3,.wav,.flac,.m4a,.ogg,.aac"
-                    disabled={
-                      busy ||
-                      current?.status === "published" ||
-                      ["queued", "processing"].includes(
-                        current?.processing || "",
+                    aria-label="作品名称"
+                    value={form.title}
+                    maxLength={100}
+                    onChange={(e) => field("title", e.target.value)}
+                    required
+                  />
+                </label>
+                <label className="wide">
+                  作品简介
+                  <textarea
+                    value={form.description}
+                    maxLength={500}
+                    onChange={(e) => field("description", e.target.value)}
+                  />
+                </label>
+                <label>
+                  风格
+                  <input
+                    value={form.genre}
+                    maxLength={40}
+                    onChange={(e) => field("genre", e.target.value)}
+                  />
+                </label>
+                <label>
+                  情绪
+                  <input
+                    value={form.mood}
+                    maxLength={40}
+                    onChange={(e) => field("mood", e.target.value)}
+                  />
+                </label>
+                <label>
+                  生成工具
+                  <select
+                    value={form.source}
+                    onChange={(e) => field("source", e.target.value)}
+                  >
+                    {["MusicFX", "Flow Music", "其他", "本地合成样例"].map(
+                      (x) => (
+                        <option key={x}>{x}</option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <label>
+                  生成日期
+                  <input
+                    type="date"
+                    value={form.generatedAt}
+                    onChange={(e) => field("generatedAt", e.target.value)}
+                  />
+                </label>
+                <label>
+                  类型
+                  <select
+                    value={form.vocal}
+                    onChange={(e) =>
+                      field("vocal", e.target.value as Editable["vocal"])
+                    }
+                  >
+                    <option value="instrumental">纯音乐</option>
+                    <option value="vocal">人声</option>
+                  </select>
+                </label>
+                <label>
+                  标签（逗号分隔）
+                  <input
+                    value={form.tags.join(",")}
+                    onChange={(e) =>
+                      field(
+                        "tags",
+                        e.target.value.split(/[,，]/).map((x) => x.trim()),
                       )
                     }
-                    onChange={(e) => setAudio(e.target.files?.[0] || null)}
+                  />
+                </label>
+                <label className="wide">
+                  创作故事
+                  <textarea
+                    value={form.story}
+                    onChange={(e) => field("story", e.target.value)}
+                  />
+                </label>
+                <details className="wide">
+                  <summary>歌词与提示词（可选）</summary>
+                  <label>
+                    歌词
+                    <textarea
+                      value={form.lyrics}
+                      onChange={(e) => field("lyrics", e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    提示词
+                    <textarea
+                      value={form.prompt}
+                      onChange={(e) => field("prompt", e.target.value)}
+                    />
+                  </label>
+                </details>
+                <label className="check-label wide">
+                  <input
+                    type="checkbox"
+                    checked={form.featured}
+                    onChange={(e) => field("featured", e.target.checked)}
+                  />
+                  设为首页精选
+                </label>
+              </div>
+              <div className="upload-panel">
+                <h3>
+                  <Upload size={18} />
+                  音频与封面
+                </h3>
+                <p>
+                  音频最多 100 MB、20
+                  分钟。原样保存和播放，不重编码、不调整响度；请在发布前试听并检查目标浏览器是否支持该格式。
+                </p>
+                <div key={uploadKey} className="form-grid">
+                  <label>
+                    音频文件
+                    <input
+                      aria-label="音频文件"
+                      type="file"
+                      accept=".mp3,.wav,.flac,.m4a,.ogg,.aac"
+                      disabled={
+                        busy ||
+                        current?.status === "published" ||
+                        ["queued", "processing"].includes(
+                          current?.processing || "",
+                        )
+                      }
+                      onChange={(e) => setAudio(e.target.files?.[0] || null)}
+                    />
+                  </label>
+                  <label>
+                    封面（可选）
+                    <input
+                      aria-label="封面文件"
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp"
+                      disabled={busy || current?.status === "published"}
+                      onChange={(e) => setCover(e.target.files?.[0] || null)}
+                    />
+                  </label>
+                </div>
+                <button
+                  className="secondary"
+                  disabled={busy || !audio || current?.status === "published"}
+                  onClick={() => void upload()}
+                >
+                  <Upload size={16} />
+                  上传并处理
+                </button>
+                {current ? (
+                  <p>
+                    处理状态：{statuses[current.processing]}{" "}
+                    {current.duration ? `· ${time(current.duration)}` : ""}
+                  </p>
+                ) : null}
+                {current?.processingError ? (
+                  <p className="form-error">{current.processingError}</p>
+                ) : null}
+                {current?.processing === "failed" ? (
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        await api(`/api/admin/tracks/${current.id}/retry`, {
+                          method: "POST",
+                        });
+                      }, "已重新排队")
+                    }
+                  >
+                    <RotateCcw size={16} />
+                    重试处理
+                  </button>
+                ) : null}
+                {current?.processing === "ready" ? (
+                  <div className="preview">
+                    <h4>
+                      <Eye size={16} />
+                      发布前预览
+                    </h4>
+                    {current.hasCover ? (
+                      <img
+                        src={`/api/admin/tracks/${current.id}/preview/cover?v=${current.mediaVersion || 0}`}
+                        alt="封面预览"
+                      />
+                    ) : null}
+                    <audio
+                      key={
+                        current.id + (current.mediaVersion || current.duration)
+                      }
+                      controls
+                      preload="none"
+                      src={`/api/admin/tracks/${current.id}/preview/audio?v=${current.mediaVersion || 0}`}
+                    />
+                  </div>
+                ) : null}
+              </div>
+              <div className="license-editor">
+                <h3>
+                  <ShieldCheck size={18} />
+                  下载许可
+                </h3>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={form.rightsConfirmed}
+                    onChange={(e) => field("rightsConfirmed", e.target.checked)}
+                  />
+                  已确认生成工具条款及封面、歌词等素材权利
+                </label>
+                <label>
+                  许可依据（仅后台可见）
+                  <textarea
+                    value={form.rightsEvidence}
+                    placeholder="记录适用条款链接、核实日期及素材来源"
+                    onChange={(e) => field("rightsEvidence", e.target.value)}
                   />
                 </label>
                 <label>
-                  封面（可选）
-                  <input
-                    aria-label="封面文件"
-                    type="file"
-                    accept=".png,.jpg,.jpeg,.webp"
-                    disabled={busy || current?.status === "published"}
-                    onChange={(e) => setCover(e.target.files?.[0] || null)}
+                  访客可见的使用说明
+                  <textarea
+                    value={form.licenseText}
+                    placeholder="请明确允许的使用范围；不要默认宣称可商用或无版权"
+                    onChange={(e) => field("licenseText", e.target.value)}
                   />
                 </label>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={form.downloadAllowed}
+                    onChange={(e) => field("downloadAllowed", e.target.checked)}
+                  />
+                  开放原格式下载
+                </label>
               </div>
-              <button
-                className="secondary"
-                disabled={busy || !audio || current?.status === "published"}
-                onClick={() => void upload()}
-              >
-                <Upload size={16} />
-                上传并处理
-              </button>
-              {current ? (
-                <p>
-                  处理状态：{statuses[current.processing]}{" "}
-                  {current.duration ? `· ${time(current.duration)}` : ""}
-                </p>
-              ) : null}
-              {current?.processingError ? (
-                <p className="form-error">{current.processingError}</p>
-              ) : null}
-              {current?.processing === "failed" ? (
+              <div className="editor-actions">
                 <button
                   className="secondary"
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      await api(`/api/admin/tracks/${current.id}/retry`, {
-                        method: "POST",
-                      });
-                    }, "已重新排队")
+                      await save();
+                    })
                   }
                 >
-                  <RotateCcw size={16} />
-                  重试处理
+                  <Save size={16} />
+                  保存{current?.status === "published" ? "修改" : "草稿"}
                 </button>
-              ) : null}
-              {current?.processing === "ready" ? (
-                <div className="preview">
-                  <h4>
-                    <Eye size={16} />
-                    发布前预览
-                  </h4>
-                  {current.hasCover ? (
-                    <img
-                      src={`/api/admin/tracks/${current.id}/preview/cover?v=${current.mediaVersion || 0}`}
-                      alt="封面预览"
-                    />
-                  ) : null}
-                  <audio
-                    key={
-                      current.id + (current.mediaVersion || current.duration)
+                {current?.status === "published" ? (
+                  <button
+                    className="secondary danger"
+                    disabled={busy}
+                    onClick={() => void unpublish(current)}
+                  >
+                    下架作品
+                  </button>
+                ) : (
+                  <button
+                    className="primary"
+                    disabled={busy || current?.processing !== "ready"}
+                    onClick={() =>
+                      void run(async () => {
+                        const t = await save();
+                        await api(`/api/admin/tracks/${t.id}/publish`, {
+                          method: "POST",
+                        });
+                        setEditorOpen(false);
+                      }, "作品已发布")
                     }
-                    controls
-                    preload="none"
-                    src={`/api/admin/tracks/${current.id}/preview/audio?v=${current.mediaVersion || 0}`}
-                  />
-                </div>
-              ) : null}
-            </div>
-            <div className="license-editor">
-              <h3>
-                <ShieldCheck size={18} />
-                下载许可
-              </h3>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={form.rightsConfirmed}
-                  onChange={(e) => field("rightsConfirmed", e.target.checked)}
-                />
-                已确认生成工具条款及封面、歌词等素材权利
-              </label>
-              <label>
-                许可依据（仅后台可见）
-                <textarea
-                  value={form.rightsEvidence}
-                  placeholder="记录适用条款链接、核实日期及素材来源"
-                  onChange={(e) => field("rightsEvidence", e.target.value)}
-                />
-              </label>
-              <label>
-                访客可见的使用说明
-                <textarea
-                  value={form.licenseText}
-                  placeholder="请明确允许的使用范围；不要默认宣称可商用或无版权"
-                  onChange={(e) => field("licenseText", e.target.value)}
-                />
-              </label>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={form.downloadAllowed}
-                  onChange={(e) => field("downloadAllowed", e.target.checked)}
-                />
-                开放原格式下载
-              </label>
-            </div>
-            <div className="editor-actions">
-              <button
-                className="secondary"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    await save();
-                  })
-                }
-              >
-                <Save size={16} />
-                保存{current?.status === "published" ? "修改" : "草稿"}
-              </button>
-              {current?.status === "published" ? (
-                <button
-                  className="secondary danger"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await api(`/api/admin/tracks/${current.id}/unpublish`, {
-                        method: "POST",
-                      });
-                    }, "已下架，新的播放与下载请求已关闭")
-                  }
-                >
-                  下架作品
-                </button>
-              ) : (
-                <button
-                  className="primary"
-                  disabled={busy || current?.processing !== "ready"}
-                  onClick={() =>
-                    void run(async () => {
-                      const t = await save();
-                      await api(`/api/admin/tracks/${t.id}/publish`, {
-                        method: "POST",
-                      });
-                    }, "作品已发布")
-                  }
-                >
-                  <Check size={16} />
-                  发布作品
-                </button>
-              )}
-            </div>
-          </section>
-        </div>
+                  >
+                    <Check size={16} />
+                    发布作品
+                  </button>
+                )}
+              </div>
+            </section>
+          </AdminDrawer>
+        </>
       ) : (
         <div className="admin-layout">
           <aside className="admin-track-list">
