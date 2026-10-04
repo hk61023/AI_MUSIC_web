@@ -24,7 +24,19 @@ import {
   login,
   logout,
   sameOrigin,
+  activeSession,
+  sessionHash,
 } from "./security.mjs";
+import {
+  mfaEnabled,
+  mfaRequired,
+  verifyFactor,
+  enrollment,
+  confirmEnrollment,
+  recoveryCodes,
+  recoveryRemaining,
+} from "./mfa.mjs";
+import { recordVisit, visitStats, lookupIP } from "./visits.mjs";
 import {
   ingest,
   enqueue,
@@ -86,6 +98,10 @@ const limiter = (limit, minutes = 1) =>
   });
 app.use("/api", limiter(300));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.post("/api/visits", limiter(30), (req, res) => {
+  recordVisit(req.body, req.ip);
+  res.sendStatus(204);
+});
 app.get("/api/catalog", (req, res) => {
   const tracks = allTracks()
       .filter((t) => t.status === "published")
@@ -148,22 +164,76 @@ app.get("/api/admin/session", (req, res) =>
   res.json({
     authenticated: isAdmin(req),
     configured: Boolean(setting("adminHash")),
+    mfaEnabled: mfaEnabled(),
+    setupRequired: Boolean(
+      activeSession(req) && !mfaEnabled() && mfaRequired(),
+    ),
   }),
 );
 app.post("/api/admin/login", limiter(8, 15), async (req, res) => {
-  const { password } = z
-    .object({ password: z.string().max(256) })
+  const { password, code } = z
+    .object({
+      password: z.string().max(256),
+      code: z.string().max(64).optional(),
+    })
     .parse(req.body);
   if (!(await checkPassword(password)))
     return res.status(401).json({ error: "密码不正确，或管理员尚未初始化" });
-  login(res);
-  res.json({ ok: true });
+  if (mfaEnabled() && !verifyFactor(code))
+    return res
+      .status(401)
+      .json({ error: "动态验证码或恢复码无效；已用过的验证码不能再次使用" });
+  db.prepare("DELETE FROM sessions WHERE token=?").run(sessionHash(req));
+  login(res, mfaEnabled());
+  res.json({ ok: true, setupRequired: !mfaEnabled() && mfaRequired() });
 });
-app.post("/api/admin/logout", requireAdmin, (req, res) => {
+app.post("/api/admin/logout", (req, res) => {
   logout(req, res);
   res.sendStatus(204);
 });
+const requireSetup = (req, res, next) => {
+  if (!activeSession(req) || mfaEnabled())
+    return res.status(403).json({ error: "请先验证密码，或二次验证已经启用" });
+  next();
+};
+app.post(
+  "/api/admin/mfa/setup",
+  limiter(8, 15),
+  requireSetup,
+  async (req, res) => res.json(await enrollment(sessionHash(req))),
+);
+app.post("/api/admin/mfa/confirm", limiter(8, 15), requireSetup, (req, res) => {
+  const { code } = z.object({ code: z.string().max(6) }).parse(req.body);
+  const codes = confirmEnrollment(sessionHash(req), code);
+  if (!codes)
+    return res.status(400).json({ error: "验证码不正确或绑定已过期，请重试" });
+  login(res, true);
+  res.json({ codes });
+});
 app.use("/api/admin", requireAdmin);
+app.get("/api/admin/visits", (req, res) => res.json(visitStats(req.query)));
+app.post("/api/admin/visits/lookup", limiter(20), async (req, res) => {
+  const { ip } = z.object({ ip: z.string().max(45) }).parse(req.body);
+  try {
+    res.json(await lookupIP(ip));
+  } catch {
+    res.status(502).json({ error: "IP 归属查询失败，请稍后重试" });
+  }
+});
+app.get("/api/admin/mfa", (req, res) =>
+  res.json({ enabled: mfaEnabled(), remaining: recoveryRemaining() }),
+);
+app.post("/api/admin/mfa/recovery", limiter(8, 15), async (req, res) => {
+  const { password, code } = z
+    .object({ password: z.string().max(256), code: z.string().max(64) })
+    .parse(req.body);
+  if (!(await checkPassword(password)) || !verifyFactor(code))
+    return res.status(401).json({ error: "密码或验证码无效" });
+  const codes = recoveryCodes();
+  db.exec("DELETE FROM sessions");
+  login(res, true);
+  res.json({ codes });
+});
 app.get("/api/admin/catalog", (req, res) =>
   res.json({ tracks: allTracks(), playlists: allPlaylists() }),
 );
@@ -575,6 +645,7 @@ const cleanup = setInterval(() => {
     Date.now() - 90 * 86400000,
   );
   db.prepare("DELETE FROM sessions WHERE expires<?").run(Date.now());
+  db.prepare("DELETE FROM visits WHERE seen<?").run(Date.now() - 90 * 86400000);
 }, 3600000);
 cleanup.unref();
 if (process.env.NO_LISTEN !== "1")

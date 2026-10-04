@@ -37,6 +37,7 @@ import {
   type Playlist,
 } from "./types";
 import { PlayerProvider, usePlayer } from "./player";
+import VisitTracker from "./VisitTracker";
 const Admin = lazy(() => import("./Admin"));
 const nav = [
   ["/", "发现音乐", Compass],
@@ -69,6 +70,7 @@ export default function App() {
   }, []);
   return (
     <PlayerProvider tracks={catalog.tracks}>
+      <VisitTracker />
       <Shell>
         {error ? (
           <div className="banner" role="alert">
@@ -819,7 +821,12 @@ function About() {
           </p>
           <h2>隐私与反馈</h2>
           <p>
-            收藏与播放进度保存在当前设备的浏览器。网站记录播放和下载事件用于改善体验，不要求听众注册账号。若需反馈，请联系分享本站的创作者；公开联系地址尚未配置。
+            收藏与播放进度保存在当前设备的浏览器。网站记录
+            IP、访问页面、有效停留时间及播放和下载事件，用于访问统计与改善体验。访问明细保留
+            90 天，按 IP 汇总的次数和时长累计保留；IP
+            不代表独立个人。管理员主动查询归属时，该 IP 会发送给
+            ipwho.is，结果缓存 7
+            天。不要求听众注册账号。若需反馈，请联系分享本站的创作者；公开联系地址尚未配置。
           </p>
         </section>
       </div>

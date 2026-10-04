@@ -11,6 +11,31 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events(track_id TEXT NOT NULL, play_id TEXT NOT NULL, kind TEXT NOT NULL, created INTEGER NOT NULL, UNIQUE(track_id,play_id,kind));
 PRAGMA user_version=1;`);
+if (
+  !db
+    .prepare("PRAGMA table_info(sessions)")
+    .all()
+    .some((c) => c.name === "verified")
+) {
+  db.exec(
+    "ALTER TABLE sessions ADD COLUMN verified INTEGER NOT NULL DEFAULT 0",
+  );
+  db.exec("DELETE FROM sessions");
+}
+db.exec(`CREATE TABLE IF NOT EXISTS visits(id TEXT PRIMARY KEY, ip TEXT NOT NULL, started INTEGER NOT NULL, seen INTEGER NOT NULL, duration INTEGER NOT NULL DEFAULT 0, reported INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS visitors(ip TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0, duration INTEGER NOT NULL DEFAULT 0, seen INTEGER NOT NULL, latest_id TEXT NOT NULL, latest_duration INTEGER NOT NULL DEFAULT 0, event TEXT NOT NULL, path TEXT NOT NULL, geo TEXT, geo_at INTEGER);
+CREATE INDEX IF NOT EXISTS visits_seen ON visits(seen);
+CREATE INDEX IF NOT EXISTS visitors_seen ON visitors(seen);
+PRAGMA user_version=2;`);
+if (
+  !db
+    .prepare("PRAGMA table_info(visitors)")
+    .all()
+    .some((c) => c.name === "event_at")
+)
+  db.exec(
+    "ALTER TABLE visitors ADD COLUMN event_at INTEGER NOT NULL DEFAULT 0",
+  );
 export const allTracks = () =>
   db
     .prepare("SELECT document FROM tracks")

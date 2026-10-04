@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 import { db, setting, setSetting } from "./db.mjs";
+import { mfaEnabled, mfaRequired } from "./mfa.mjs";
 const scrypt = promisify(scryptCb);
 const digest = (token) => createHash("sha256").update(token).digest("hex");
 export async function setPassword(password) {
@@ -32,33 +33,40 @@ export function sessionToken(req) {
       ?.slice(15) || ""
   );
 }
-export function isAdmin(req) {
+export const sessionHash = (req) => digest(sessionToken(req));
+export function activeSession(req) {
   const token = sessionToken(req);
-  return (
-    token.length === 64 &&
-    Boolean(
-      db
-        .prepare("SELECT token FROM sessions WHERE token=? AND expires>?")
-        .get(digest(token), Date.now()),
-    )
+  return token.length === 64
+    ? db
+        .prepare("SELECT * FROM sessions WHERE token=? AND expires>?")
+        .get(digest(token), Date.now())
+    : null;
+}
+export function isAdmin(req) {
+  const session = activeSession(req);
+  return Boolean(
+    session && (mfaEnabled() ? session.verified === 1 : !mfaRequired()),
   );
 }
 export function requireAdmin(req, res, next) {
   if (!isAdmin(req)) return res.status(401).json({ error: "请先登录管理后台" });
   next();
 }
-export function login(res) {
+export function login(res, verified = false) {
   db.prepare("DELETE FROM sessions WHERE expires<?").run(Date.now());
   const token = randomBytes(32).toString("hex");
-  db.prepare("INSERT INTO sessions VALUES(?,?)").run(
+  const duration =
+    !verified && (mfaRequired() || mfaEnabled()) ? 600000 : 12 * 60 * 60 * 1000;
+  db.prepare("INSERT INTO sessions(token,expires,verified) VALUES(?,?,?)").run(
     digest(token),
-    Date.now() + 12 * 60 * 60 * 1000,
+    Date.now() + duration,
+    verified ? 1 : 0,
   );
   res.cookie("tingyu_session", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
-    maxAge: 12 * 60 * 60 * 1000,
+    maxAge: duration,
     path: "/",
   });
 }

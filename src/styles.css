@@ -2541,3 +2541,77 @@ html {
     scroll-behavior: auto !important;
   }
 }
+.visit-panel,
+.security-panel {
+  background: var(--panel, #19191f);
+  border: 1px solid var(--border, #30303a);
+  border-radius: 16px;
+  padding: 24px;
+  margin: 24px 0;
+}
+.security-panel {
+  max-width: 640px;
+  margin: 30px auto;
+}
+.security-panel form {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+.security-panel img {
+  display: block;
+  margin: 20px 0;
+  border-radius: 12px;
+}
+.mfa-secret {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  background: #101015;
+}
+.recovery-codes {
+  user-select: all;
+  white-space: pre-wrap;
+  line-height: 1.8;
+  padding: 16px;
+  background: #101015;
+  border-radius: 12px;
+}
+.visit-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1.3fr 1fr;
+  gap: 20px;
+  padding: 20px 0;
+  border-bottom: 1px solid #30303a;
+  overflow-wrap: anywhere;
+}
+.visit-row small,
+.visit-panel .muted {
+  color: #aaa7b8;
+}
+.visit-row p {
+  margin: 8px 0;
+}
+.visit-row button {
+  margin-top: 10px;
+}
+.visit-pagination {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 24px;
+}
+@media (max-width: 720px) {
+  .visit-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .visit-panel,
+  .security-panel {
+    padding: 16px;
+  }
+  .admin-tabs {
+    flex-wrap: wrap;
+  }
+}

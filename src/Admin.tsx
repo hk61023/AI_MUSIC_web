@@ -16,6 +16,8 @@ import {
 import { api, type Track, type Catalog, type Playlist, time } from "./types";
 import AdminWorks from "./AdminWorks";
 import AdminDrawer from "./AdminDrawer";
+import AdminVisits from "./AdminVisits";
+import AdminSecurity from "./AdminSecurity";
 type Editable = Pick<
   Track,
   | "title"
@@ -70,8 +72,11 @@ export default function Admin({ refresh }: { refresh: () => void }) {
   const [session, setSession] = useState<{
       authenticated: boolean;
       configured: boolean;
+      mfaEnabled?: boolean;
+      setupRequired?: boolean;
     } | null>(null),
     [password, setPassword] = useState(""),
+    [loginCode, setLoginCode] = useState(""),
     [error, setError] = useState(""),
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false);
@@ -268,13 +273,17 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       return valid.length === old.length ? old : valid;
     });
   }, [catalog.tracks]);
-  const run = async (action: () => Promise<void>, success = "已保存") => {
+  const run = async (
+    action: () => Promise<void>,
+    success = "已保存",
+    reload = true,
+  ) => {
     setBusy(true);
     setError("");
     setMessage("");
     try {
       await action();
-      if (session?.authenticated) {
+      if (reload && session?.authenticated) {
         await load();
         refresh();
       }
@@ -292,6 +301,18 @@ export default function Admin({ refresh }: { refresh: () => void }) {
         <p>{error || "正在连接管理后台…"}</p>
       </section>
     );
+  if (!session.authenticated)
+    if (session.setupRequired)
+      return (
+        <AdminSecurity
+          setup
+          onDone={() =>
+            void api<NonNullable<typeof session>>("/api/admin/session").then(
+              setSession,
+            )
+          }
+        />
+      );
   if (!session.authenticated)
     return (
       <section className="admin-login">
@@ -311,10 +332,13 @@ export default function Admin({ refresh }: { refresh: () => void }) {
             void run(async () => {
               await api("/api/admin/login", {
                 method: "POST",
-                body: JSON.stringify({ password }),
+                body: JSON.stringify({ password, code: loginCode }),
               });
               setPassword("");
-              setSession({ authenticated: true, configured: true });
+              setLoginCode("");
+              setSession(
+                await api<NonNullable<typeof session>>("/api/admin/session"),
+              );
             }, "登录成功");
           }}
         >
@@ -330,6 +354,19 @@ export default function Admin({ refresh }: { refresh: () => void }) {
               maxLength={256}
             />
           </label>
+          {session.mfaEnabled && (
+            <label>
+              动态验证码或一次性恢复码
+              <input
+                aria-label="登录验证码"
+                autoComplete="one-time-code"
+                value={loginCode}
+                onChange={(e) => setLoginCode(e.target.value)}
+                required
+                maxLength={64}
+              />
+            </label>
+          )}
           {error ? (
             <p role="alert" className="form-error">
               {error}
@@ -441,10 +478,16 @@ export default function Admin({ refresh }: { refresh: () => void }) {
           className="secondary"
           disabled={busy || importing}
           onClick={() =>
-            void run(async () => {
-              await api("/api/admin/logout", { method: "POST" });
-              setSession({ authenticated: false, configured: true });
-            }, "已退出")
+            void run(
+              async () => {
+                await api("/api/admin/logout", { method: "POST" });
+                setSession(
+                  await api<NonNullable<typeof session>>("/api/admin/session"),
+                );
+              },
+              "已退出",
+              false,
+            )
           }
         >
           <LogOut size={16} />
@@ -481,6 +524,8 @@ export default function Admin({ refresh }: { refresh: () => void }) {
             catalog.tracks.filter((t) => t.status === "published").length,
           ],
           ["lists", "歌单管理", null],
+          ["visits", "访问统计", null],
+          ["security", "账号安全", null],
         ].map(([value, label, count]) => (
           <button
             key={value}
@@ -638,7 +683,11 @@ export default function Admin({ refresh }: { refresh: () => void }) {
           {message}
         </div>
       ) : null}
-      {tab !== "lists" ? (
+      {tab === "visits" ? (
+        <AdminVisits />
+      ) : tab === "security" ? (
+        <AdminSecurity />
+      ) : tab !== "lists" ? (
         <>
           <AdminWorks
             key={tab}
