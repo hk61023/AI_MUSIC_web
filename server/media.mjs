@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, copyFile, rm, stat } from "node:fs/promises";
+import { mkdir, copyFile, rm, stat, rmdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { Storage } from "@google-cloud/storage";
 import { dataDir, getTrack, saveTrack } from "./db.mjs";
@@ -109,7 +109,21 @@ async function processTrack(id) {
       filePath(id, "audio"),
     ]);
     const cover = path.join(trackDir(id), "cover-original");
-    if (await stat(cover).catch(() => null))
+    const separateCover = await stat(cover).catch(() => null);
+    const embedded =
+      !separateCover &&
+      JSON.parse(
+        await command(process.env.FFPROBE_PATH || "ffprobe", [
+          "-v",
+          "error",
+          "-show_entries",
+          "stream=index:stream_disposition=attached_pic",
+          "-of",
+          "json",
+          source,
+        ]),
+      ).streams?.find((s) => s.disposition?.attached_pic);
+    if (separateCover || embedded)
       await command(process.env.FFMPEG_PATH || "ffmpeg", [
         "-y",
         "-v",
@@ -119,7 +133,9 @@ async function processTrack(id) {
         "-threads",
         "1",
         "-i",
-        cover,
+        separateCover ? cover : source,
+        "-map",
+        separateCover ? "0:v:0" : `0:${embedded.index}`,
         "-vf",
         "scale=1000:1000:force_original_aspect_ratio=increase,crop=1000:1000",
         "-frames:v",
@@ -165,6 +181,20 @@ export async function ingest(id, audio, cover) {
   await copyFile(audio, path.join(trackDir(id), "original"));
   if (cover) await copyFile(cover, path.join(trackDir(id), "cover-original"));
   enqueue(id);
+}
+export async function deleteDraftMedia(id) {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("作品标识无效");
+  if (bucket) {
+    for (const name of ["original", "play.mp3", "cover.jpg"])
+      await bucket
+        .file(`private/${id}/${name}`)
+        .delete({ ignoreNotFound: true });
+  }
+  for (const name of ["original", "play.mp3", "cover.jpg", "cover-original"])
+    await rm(path.join(trackDir(id), name), { force: true });
+  await rmdir(trackDir(id)).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+  });
 }
 export async function publishMedia(t) {
   if (!bucket) return;

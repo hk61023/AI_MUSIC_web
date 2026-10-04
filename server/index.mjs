@@ -31,6 +31,7 @@ import {
   publishMedia,
   unpublishMedia,
   sendMedia,
+  deleteDraftMedia,
 } from "./media.mjs";
 import { trackHtml, escapeHtml } from "./seo.mjs";
 import { readAudioMetadata } from "./audio-metadata.mjs";
@@ -397,6 +398,33 @@ app.get("/api/admin/tracks/:id/preview/:type", async (req, res) => {
   await sendMedia(req, res, t, req.params.type, { preview: true });
 });
 const transitions = new Set();
+app.delete("/api/admin/tracks/:id", async (req, res) => {
+  const t = getTrack(req.params.id);
+  if (!t) return res.status(404).json({ error: "作品不存在" });
+  if (t.status !== "draft")
+    return res.status(409).json({ error: "只能删除未发布的草稿" });
+  if (
+    transitions.has(t.id) ||
+    uploading.has(t.id) ||
+    ["queued", "processing"].includes(t.processing)
+  )
+    return res.status(409).json({ error: "作品正在处理，请稍后删除" });
+  transitions.add(t.id);
+  try {
+    await deleteDraftMedia(t.id);
+    for (const list of allPlaylists())
+      if (list.trackIds.includes(t.id))
+        savePlaylist({
+          ...list,
+          trackIds: list.trackIds.filter((id) => id !== t.id),
+        });
+    db.prepare("DELETE FROM events WHERE track_id=?").run(t.id);
+    db.prepare("DELETE FROM tracks WHERE id=?").run(t.id);
+    res.json({ ok: true });
+  } finally {
+    transitions.delete(t.id);
+  }
+});
 app.post("/api/admin/tracks/:id/publish", async (req, res) => {
   let t = getTrack(req.params.id);
   if (!t) return res.status(404).json({ error: "作品不存在" });

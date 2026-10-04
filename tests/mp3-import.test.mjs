@@ -88,6 +88,8 @@ test("MP3／M4A 标签读取、AAC／ALAC、重试去重及失败隔离", async 
   assert.match(track.description, /艺术家：测试艺术家/);
   assert.match(track.description, /专辑：夜航/);
   assert.match(track.description, /2024/);
+  assert.match(track.description, /文件日期标签：2024/);
+  assert.doesNotMatch(track.description, /发行时间/);
   assert.match(track.description, /中文备注/);
   assert.equal(track.genre, "Ambient");
   assert.match(track.lyrics, /第一行/);
@@ -135,4 +137,85 @@ test("MP3／M4A 标签读取、AAC／ALAC、重试去重及失败隔离", async 
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.ok(allTracks().every((t) => t.processing === "ready"));
+  const image = path.join(process.env.DATA_DIR, "fixture.jpg");
+  const coverResult = spawnSync(
+    process.env.FFMPEG_PATH || "ffmpeg",
+    [
+      "-y",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=blue:s=1408x768",
+      "-frames:v",
+      "1",
+      image,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(coverResult.status, 0, coverResult.stderr);
+  for (const extension of ["mp3", "m4a"]) {
+    const output = path.join(process.env.DATA_DIR, `cover.${extension}`);
+    const result = spawnSync(
+      process.env.FFMPEG_PATH || "ffmpeg",
+      [
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        input,
+        "-i",
+        image,
+        "-map",
+        "0:a",
+        "-map",
+        "1:v",
+        "-c:a",
+        extension === "mp3" ? "libmp3lame" : "aac",
+        "-b:a",
+        "128k",
+        "-c:v",
+        "copy",
+        "-disposition:v",
+        "attached_pic",
+        output,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const imported = await (
+      await upload(await readFile(output), `cover.${extension}`)
+    ).json();
+    if (extension === "mp3") assert.match(imported.description, /128 kbps/);
+    for (let i = 0; i < 100; i++) {
+      if (allTracks().find((t) => t.id === imported.id)?.processing === "ready")
+        break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(allTracks().find((t) => t.id === imported.id)?.hasCover, true);
+    const preview = await fetch(
+      base + `/api/admin/tracks/${imported.id}/preview/cover`,
+      { headers: { Cookie: cookie } },
+    );
+    assert.equal(preview.status, 200);
+    assert.match(preview.headers.get("content-type"), /image\/jpeg/);
+    const deletion = await fetch(base + `/api/admin/tracks/${imported.id}`, {
+      method: "DELETE",
+      headers: { Origin: "http://localhost", Cookie: cookie },
+    });
+    assert.equal(deletion.status, 200);
+    assert.equal(
+      allTracks().some((t) => t.id === imported.id),
+      false,
+    );
+    assert.equal(
+      (
+        await fetch(base + `/api/admin/tracks/${imported.id}/preview/cover`, {
+          headers: { Cookie: cookie },
+        })
+      ).status,
+      404,
+    );
+  }
 });

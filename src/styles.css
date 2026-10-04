@@ -1312,12 +1312,16 @@ small {
   display: grid;
   gap: 8px;
 }
-.admin-track-list > button {
+.admin-track-list > button,
+.admin-track-list > div > button {
   text-align: left;
   justify-content: flex-start;
   font-size: 12px;
   border-radius: 6px;
   overflow-wrap: anywhere;
+}
+.admin-track-list > div > button {
+  width: 100%;
 }
 .admin-track-list .active {
   background: #af8bdb18;

@@ -17,7 +17,7 @@ export async function readAudioMetadata(file, filename) {
       "-protocol_whitelist",
       "file,pipe",
       "-show_entries",
-      "format=format_name,duration,bit_rate:format_tags:stream=codec_name,codec_type,sample_rate,channels:stream_tags:stream_disposition=attached_pic",
+      "format=format_name,duration,bit_rate:format_tags:stream=codec_name,codec_type,bit_rate,sample_rate,channels:stream_tags:stream_disposition=attached_pic",
       "-of",
       "json",
       file,
@@ -61,7 +61,7 @@ export async function readAudioMetadata(file, filename) {
   const info = [
     ["艺术家", tags.artist || tags.album_artist],
     ["专辑", tags.album],
-    ["发行时间", tags.date || tags.year],
+    ["文件日期标签", tags.date || tags.year],
     ["曲目", tags.track],
     ["作曲", tags.composer],
     ["风格", genre],
@@ -69,10 +69,14 @@ export async function readAudioMetadata(file, filename) {
   ]
     .filter(([, value]) => clean(value, 500))
     .map(([label, value]) => `${label}：${clean(value, 500)}`);
-  const bitrate = Number(probe.format.bit_rate);
+  const bitrate = Number(audio.bit_rate);
   info.push(
     `格式：${mp3 ? "MP3" : `M4A (${audio.codec_name.toUpperCase()})`}${bitrate > 0 ? ` · ${Math.round(bitrate / 1000)} kbps` : ""}${Number(audio.sample_rate) > 0 ? ` · ${audio.sample_rate} Hz` : ""}`,
   );
+  if (Number(audio.channels) > 0)
+    info.push(
+      `声道：${audio.channels === 2 ? "立体声（2 声道）" : `${audio.channels} 声道`}`,
+    );
   const lyrics = Object.entries(tags).find(
     ([k]) =>
       k === "lyrics" ||

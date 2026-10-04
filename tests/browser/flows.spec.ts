@@ -46,16 +46,14 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
     .fill("browser-test-only-password");
   await page.getByRole("button", { name: "进入管理后台" }).click();
   const panel = page.getByRole("region", { name: "批量导入 MP3／M4A" });
-  await panel
-    .getByLabel("选择多个 MP3／M4A 文件")
-    .setInputFiles([
-      {
-        name: "broken.mp3",
-        mimeType: "audio/mpeg",
-        buffer: Buffer.from("invalid"),
-      },
-      ...files,
-    ]);
+  await panel.getByLabel("选择多个 MP3／M4A 文件").setInputFiles([
+    {
+      name: "broken.mp3",
+      mimeType: "audio/mpeg",
+      buffer: Buffer.from("invalid"),
+    },
+    ...files,
+  ]);
   await panel.getByRole("button", { name: "开始批量导入" }).click();
   await expect(panel.getByRole("status")).toHaveText("已导入 2 / 3 首");
   await expect(panel.getByText("导入失败", { exact: true })).toBeVisible();
@@ -69,6 +67,82 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
   await expect(page.getByRole("textbox", { name: "作品简介" })).toHaveValue(
     /批量艺术家/,
   );
+  await expect
+    .poll(async () => {
+      const catalog = await (
+        await page.request.get("/api/admin/catalog")
+      ).json();
+      return catalog.tracks.filter(
+        (t: { title: string; processing: string }) =>
+          t.title.startsWith("批量 ") && t.processing === "ready",
+      ).length;
+    })
+    .toBe(2);
+  await page
+    .getByRole("checkbox", { name: "选择作品 批量 MP3 标签", exact: true })
+    .check();
+  await page
+    .getByRole("checkbox", { name: "选择作品 批量 M4A 标签", exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "批量发布（2）", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已发布 2 首作品" }),
+  ).toBeVisible();
+  const published = await (await page.request.get("/api/catalog")).json();
+  expect(
+    published.tracks.filter((t: { title: string }) =>
+      t.title.startsWith("批量 "),
+    ),
+  ).toHaveLength(2);
+  expect(
+    (
+      await page.request.delete(
+        `/api/admin/tracks/${published.tracks.find((t: { title: string }) => t.title === "批量 MP3 标签").id}`,
+        { headers: { Origin: new URL(page.url()).origin } },
+      )
+    ).status(),
+  ).toBe(409);
+  await panel.getByLabel("选择多个 MP3／M4A 文件").setInputFiles(files);
+  await panel.getByRole("button", { name: "开始批量导入" }).click();
+  await expect(panel.getByRole("status")).toHaveText("已导入 2 / 2 首");
+  await expect
+    .poll(async () => {
+      const catalog = await (
+        await page.request.get("/api/admin/catalog")
+      ).json();
+      return catalog.tracks.filter(
+        (t: { title: string; processing: string; status: string }) =>
+          t.title.startsWith("批量 ") &&
+          t.status === "draft" &&
+          t.processing === "ready",
+      ).length;
+    })
+    .toBe(2);
+  await page
+    .getByRole("checkbox", { name: "选择作品 批量 MP3 标签", exact: true })
+    .check();
+  await page
+    .getByRole("checkbox", { name: "选择作品 批量 M4A 标签", exact: true })
+    .check();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page
+    .getByRole("button", { name: "批量删除草稿（2）", exact: true })
+    .click();
+  await expect(
+    page.getByRole("checkbox", { name: "选择作品 批量 MP3 标签", exact: true }),
+  ).toBeChecked();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "批量删除草稿（2）", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已删除 2 首草稿" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("checkbox", { name: "选择作品 批量 MP3 标签", exact: true }),
+  ).toHaveCount(0);
 });
 test("播放不中断、筛选、收藏、队列、刷新恢复和手机布局", async ({ page }) => {
   const errors: string[] = [];

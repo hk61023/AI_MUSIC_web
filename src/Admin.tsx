@@ -103,6 +103,74 @@ export default function Admin({ refresh }: { refresh: () => void }) {
   const [imports, setImports] = useState<ImportRow[]>([]);
   const stopImport = useRef(false);
   const [importing, setImporting] = useState(false);
+  const [checkedTracks, setCheckedTracks] = useState<string[]>([]);
+  const deleteChecked = async () => {
+    if (
+      !window.confirm(
+        `确定永久删除所选 ${checkedTracks.length} 首草稿及其音频、封面？此操作无法撤销。`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    const failedIds: string[] = [],
+      failures: string[] = [];
+    let deleted = 0;
+    for (const id of checkedTracks) {
+      try {
+        await api(`/api/admin/tracks/${id}`, { method: "DELETE" });
+        deleted++;
+        if (selected === id) choose();
+        setImports((old) => old.filter((r) => r.id !== id));
+      } catch (e) {
+        failedIds.push(id);
+        failures.push(
+          `${catalog.tracks.find((t) => t.id === id)?.title}: ${(e as Error).message}`,
+        );
+      }
+    }
+    setCheckedTracks(failedIds);
+    setMessage(`已删除 ${deleted} 首草稿`);
+    setError(failures.join("；"));
+    try {
+      await load();
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const publishChecked = async () => {
+    setBusy(true);
+    setError("");
+    const failures: string[] = [];
+    let published = 0;
+    const failedIds: string[] = [];
+    for (const id of checkedTracks) {
+      try {
+        await api(`/api/admin/tracks/${id}/publish`, { method: "POST" });
+        published++;
+      } catch (e) {
+        failedIds.push(id);
+        failures.push(
+          `${catalog.tracks.find((t) => t.id === id)?.title}: ${(e as Error).message}`,
+        );
+      }
+    }
+    setCheckedTracks(failedIds);
+    setMessage(`已发布 ${published} 首作品`);
+    setError(failures.join("；"));
+    try {
+      await load();
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const importFiles = async () => {
     stopImport.current = false;
     setImporting(true);
@@ -479,25 +547,84 @@ export default function Admin({ refresh }: { refresh: () => void }) {
       {tab === "tracks" ? (
         <div className="admin-layout">
           <aside className="admin-track-list">
+            <button
+              className="secondary"
+              disabled={busy || importing || !checkedTracks.length}
+              onClick={deleteChecked}
+            >
+              批量删除草稿（{checkedTracks.length}）
+            </button>
+            <label>
+              <input
+                type="checkbox"
+                disabled={busy || importing}
+                checked={
+                  catalog.tracks.some((t) => t.status === "draft") &&
+                  catalog.tracks
+                    .filter((t) => t.status === "draft")
+                    .every((t) => checkedTracks.includes(t.id))
+                }
+                onChange={(e) =>
+                  setCheckedTracks(
+                    e.target.checked
+                      ? catalog.tracks
+                          .filter((t) => t.status === "draft")
+                          .map((t) => t.id)
+                      : [],
+                  )
+                }
+              />
+              全选草稿
+            </label>
+            <button
+              className="secondary"
+              disabled={busy || importing || !checkedTracks.length}
+              onClick={publishChecked}
+            >
+              批量发布（{checkedTracks.length}）
+            </button>
+            <small>
+              请先逐首确认来源与许可；未处理完成或信息不完整的作品会保留为草稿。
+            </small>
             <button className="secondary" onClick={() => choose()}>
               <Plus size={16} />
               新建作品
             </button>
             {catalog.tracks.map((t) => (
-              <button
-                key={t.id}
-                className={selected === t.id ? "active" : ""}
-                onClick={() => choose(t)}
-              >
-                <Music2 size={18} />
-                <span>
-                  {t.title}
-                  <small>
-                    {t.status === "published" ? "已发布" : "草稿"} ·{" "}
-                    {statuses[t.processing]}
-                  </small>
-                </span>
-              </button>
+              <div key={t.id}>
+                {t.status === "draft" && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      aria-label={`选择作品 ${t.title}`}
+                      disabled={busy || importing}
+                      checked={checkedTracks.includes(t.id)}
+                      onChange={(e) =>
+                        setCheckedTracks((old) =>
+                          e.target.checked
+                            ? [...old, t.id]
+                            : old.filter((id) => id !== t.id),
+                        )
+                      }
+                    />
+                    选择
+                  </label>
+                )}
+                <button
+                  key={t.id}
+                  className={selected === t.id ? "active" : ""}
+                  onClick={() => choose(t)}
+                >
+                  <Music2 size={18} />
+                  <span>
+                    {t.title}
+                    <small>
+                      {t.status === "published" ? "已发布" : "草稿"} ·{" "}
+                      {statuses[t.processing]}
+                    </small>
+                  </span>
+                </button>
+              </div>
             ))}
           </aside>
           <section className="editor">
