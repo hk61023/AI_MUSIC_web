@@ -1406,7 +1406,7 @@ small {
   border-top: 1px solid #35273f;
 }
 .work-row.published-row {
-  grid-template-columns: 48px minmax(140px, 1fr) 48px 84px 100px auto;
+  grid-template-columns: 20px 48px minmax(140px, 1fr) 48px 84px 100px auto;
 }
 .work-cover {
   width: 48px;
@@ -1530,7 +1530,7 @@ small {
     gap: 10px;
   }
   .work-row.published-row {
-    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-columns: 20px 48px minmax(0, 1fr) auto;
   }
   .work-duration,
   .work-date {
@@ -1538,7 +1538,7 @@ small {
   }
   .published-row .work-duration,
   .published-row .work-date {
-    grid-column: 2;
+    grid-column: 3;
   }
   .work-row .status-pill {
     grid-column: -2 / -1;

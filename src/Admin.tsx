@@ -117,6 +117,61 @@ export default function Admin({ refresh }: { refresh: () => void }) {
   const stopImport = useRef(false);
   const [importing, setImporting] = useState(false);
   const [checkedTracks, setCheckedTracks] = useState<string[]>([]);
+  const [autoPlaylist, setAutoPlaylist] = useState(false);
+  const playlistBatch = useRef<{ key: string; requestId: string } | null>(null);
+  const [pendingPlaylist, setPendingPlaylist] = useState<{
+    trackIds: string[];
+    requestId: string;
+  } | null>(null);
+  const canAutoPlaylist =
+    checkedTracks.length > 0 &&
+    checkedTracks.every((id) => batchIds.includes(id));
+  async function createAutoPlaylist(
+    request: NonNullable<typeof pendingPlaylist>,
+  ) {
+    const list = await api<Playlist>("/api/admin/playlists/auto", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    setPendingPlaylist(null);
+    return list;
+  }
+  const unpublishChecked = async () => {
+    if (
+      !window.confirm(
+        `确定下架所选 ${checkedTracks.length} 首作品？音频和封面保留，并移至草稿。`,
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    const failed: string[] = [],
+      failures: string[] = [];
+    let count = 0;
+    for (const id of checkedTracks) {
+      try {
+        await api(`/api/admin/tracks/${id}/unpublish`, { method: "POST" });
+        count++;
+      } catch (e) {
+        failed.push(id);
+        failures.push(
+          `${catalog.tracks.find((t) => t.id === id)?.title}: ${(e as Error).message}`,
+        );
+      }
+    }
+    setCheckedTracks(failed);
+    setMessage(`已下架 ${count} 首作品，已移至草稿`);
+    setError(failures.join("；"));
+    try {
+      await load();
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const deleteChecked = async () => {
     if (
       !window.confirm(
@@ -161,10 +216,12 @@ export default function Admin({ refresh }: { refresh: () => void }) {
     const failures: string[] = [];
     let published = 0;
     const failedIds: string[] = [];
+    const publishedIds: string[] = [];
     for (const id of checkedTracks) {
       try {
         await api(`/api/admin/tracks/${id}/publish`, { method: "POST" });
         published++;
+        publishedIds.push(id);
       } catch (e) {
         failedIds.push(id);
         failures.push(
@@ -174,6 +231,29 @@ export default function Admin({ refresh }: { refresh: () => void }) {
     }
     setCheckedTracks(failedIds);
     setMessage(`已发布 ${published} 首作品`);
+    if (
+      autoPlaylist &&
+      canAutoPlaylist &&
+      !pendingPlaylist &&
+      publishedIds.length
+    ) {
+      const key = [...batchIds].sort().join(",");
+      if (playlistBatch.current?.key !== key)
+        playlistBatch.current = { key, requestId: crypto.randomUUID() };
+      const request = {
+        trackIds: publishedIds,
+        requestId: playlistBatch.current.requestId,
+      };
+      setPendingPlaylist(request);
+      try {
+        const list = await createAutoPlaylist(request);
+        setMessage(`已发布 ${published} 首作品，并创建「${list.title}」`);
+      } catch (e) {
+        failures.push(
+          `作品已发布，但歌单创建失败：${(e as Error).message}。可点击重试创建歌单，无需重新发布。`,
+        );
+      }
+    }
     setError(failures.join("；"));
     try {
       await load();
@@ -268,11 +348,15 @@ export default function Admin({ refresh }: { refresh: () => void }) {
   useEffect(() => {
     setCheckedTracks((old) => {
       const valid = old.filter((id) =>
-        catalog.tracks.some((t) => t.id === id && t.status === "draft"),
+        catalog.tracks.some(
+          (t) =>
+            t.id === id &&
+            t.status === (tab === "published" ? "published" : "draft"),
+        ),
       );
       return valid.length === old.length ? old : valid;
     });
-  }, [catalog.tracks]);
+  }, [catalog.tracks, tab]);
   const run = async (
     action: () => Promise<void>,
     success = "已保存",
@@ -683,6 +767,22 @@ export default function Admin({ refresh }: { refresh: () => void }) {
           {message}
         </div>
       ) : null}
+      {pendingPlaylist && (
+        <div className="banner" role="status">
+          已有 {pendingPlaylist.trackIds.length} 首作品发布，等待归入自动歌单。
+          <button
+            className="secondary"
+            disabled={busy || importing}
+            onClick={() =>
+              void run(async () => {
+                await createAutoPlaylist(pendingPlaylist);
+              }, "歌单已创建，可在歌单管理修改名称")
+            }
+          >
+            重试创建歌单
+          </button>
+        </div>
+      )}
       {tab === "visits" ? (
         <AdminVisits />
       ) : tab === "security" ? (
@@ -698,10 +798,18 @@ export default function Admin({ refresh }: { refresh: () => void }) {
             batchOnly={batchOnly}
             onBatchOnly={setBatchOnly}
             checked={checkedTracks}
-            onChecked={setCheckedTracks}
+            onChecked={(ids) => {
+              setCheckedTracks(ids);
+              if (!ids.length || ids.some((id) => !batchIds.includes(id)))
+                setAutoPlaylist(false);
+            }}
             onEdit={choose}
             onPublish={() => void publishChecked()}
             onDelete={() => void deleteChecked()}
+            onBulkUnpublish={() => void unpublishChecked()}
+            autoPlaylist={autoPlaylist}
+            canAutoPlaylist={canAutoPlaylist && !pendingPlaylist}
+            onAutoPlaylist={setAutoPlaylist}
             onFeatured={(t) =>
               void run(
                 async () => {

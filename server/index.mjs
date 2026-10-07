@@ -16,6 +16,7 @@ import {
   savePlaylist,
   publicTrack,
   setting,
+  setSetting,
 } from "./db.mjs";
 import {
   requireAdmin,
@@ -551,6 +552,56 @@ const listSchema = z
     trackIds: z.array(z.string().max(80)).max(500),
   })
   .strict();
+app.post("/api/admin/playlists/auto", (req, res) => {
+  const { trackIds, requestId } = z
+    .object({
+      trackIds: z.array(z.uuid()).min(1).max(500),
+      requestId: z.uuid(),
+    })
+    .parse(req.body);
+  const previous = setting(`autoPlaylist:${requestId}`);
+  const ids = [...new Set(trackIds)];
+  if (ids.some((id) => getTrack(id)?.status !== "published"))
+    return res.status(409).json({ error: "自动歌单只能包含已成功发布的作品" });
+  if (previous) {
+    const existing = allPlaylists().find((p) => p.id === previous);
+    if (!existing)
+      return res
+        .status(409)
+        .json({ error: "本次自动歌单已经创建并被删除，请重新发起操作" });
+    const updated = {
+      ...existing,
+      trackIds: [...new Set([...existing.trackIds, ...ids])],
+    };
+    savePlaylist(updated);
+    return res.json(updated);
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const names = new Set(allPlaylists().map((p) => p.title));
+    let sequence = Number(setting("autoPlaylistSequence") || 0);
+    let title;
+    do {
+      sequence++;
+      title = `导入歌单 ${String(sequence).padStart(3, "0")}`;
+    } while (names.has(title));
+    const list = {
+      id: randomUUID(),
+      title,
+      description: "批量导入发布的作品，可修改歌单名称与介绍。",
+      artwork: "violet",
+      trackIds: ids,
+    };
+    savePlaylist(list);
+    setSetting("autoPlaylistSequence", String(sequence));
+    setSetting(`autoPlaylist:${requestId}`, list.id);
+    db.exec("COMMIT");
+    res.status(201).json(list);
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+});
 app.post("/api/admin/playlists", (req, res) => {
   const p = { ...listSchema.parse(req.body), id: randomUUID() };
   if (p.trackIds.some((id) => !getTrack(id)))

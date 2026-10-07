@@ -91,7 +91,9 @@ test("作品分类、搜索分页、跨页勾选、编辑保护、状态流转�
   await expect(
     page.getByRole("button", { name: "批量导入", exact: true }),
   ).toHaveCount(0);
-  await expect(published.getByRole("checkbox")).toHaveCount(0);
+  await expect(
+    published.getByRole("checkbox", { name: "选择本页", exact: true }),
+  ).toBeVisible();
   await published
     .getByRole("button", { name: "预览 月光漫游", exact: true })
     .click();
@@ -117,10 +119,44 @@ test("作品分类、搜索分页、跨页勾选、编辑保护、状态流转�
     published.getByRole("button", { name: "取消精选 月光漫游", exact: true }),
   ).toBeVisible();
   // Temporary test work uses an existing local fixture, then restores its public state.
+  const publicCatalog = await (await page.request.get("/api/catalog")).json();
+  const failId = publicCatalog.tracks.find(
+    (t: { title: string }) => t.title === "落日来信",
+  ).id;
+  const failRoute = `**/api/admin/tracks/${failId}/unpublish`;
+  await page.route(failRoute, (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "模拟下架失败" }),
+    }),
+  );
   await published
-    .getByRole("button", { name: "下架 潮汐之间", exact: true })
+    .getByRole("checkbox", { name: "选择作品 潮汐之间", exact: true })
+    .check();
+  await published
+    .getByRole("checkbox", { name: "选择作品 落日来信", exact: true })
+    .check();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await published
+    .getByRole("button", { name: "批量下架（2）", exact: true })
+    .click();
+  await expect(
+    published.getByRole("checkbox", { name: "选择作品 潮汐之间", exact: true }),
+  ).toBeChecked();
+  page.once("dialog", (dialog) => dialog.accept());
+  await published
+    .getByRole("button", { name: "批量下架（2）", exact: true })
     .click();
   await expect(published.getByText("潮汐之间", { exact: true })).toHaveCount(0);
+  await expect(
+    published.getByRole("checkbox", { name: "选择作品 落日来信", exact: true }),
+  ).toBeChecked();
+  await expect(page.getByRole("alert")).toContainText("模拟下架失败");
+  await expect(published.getByRole("button", { name: /批量删除/ })).toHaveCount(
+    0,
+  );
+  await page.unroute(failRoute);
   await expect(
     page.getByRole("button", { name: /^已发布作品（/ }),
   ).toHaveAttribute("aria-pressed", "true");

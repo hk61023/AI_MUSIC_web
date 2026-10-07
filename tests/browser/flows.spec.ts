@@ -93,6 +93,18 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
     (t: { title: string }) => t.title === "批量 M4A 标签",
   ).id;
   const publishPattern = `**/api/admin/tracks/${failedId}/publish`;
+  await page
+    .getByRole("checkbox", { name: "自动新建歌单", exact: true })
+    .check();
+  const autoRoute = "**/api/admin/playlists/auto";
+  await page.route(autoRoute, async (route) => {
+    await route.fetch();
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "模拟歌单响应丢失" }),
+    });
+  });
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -126,6 +138,14 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
     page.getByRole("checkbox", { name: "选择作品 批量 MP3 标签", exact: true }),
   ).toHaveCount(0);
   await page.unroute(publishPattern);
+  await expect(
+    page.getByRole("button", { name: "重试创建歌单", exact: true }),
+  ).toBeVisible();
+  await page.unroute(autoRoute);
+  await page.getByRole("button", { name: "重试创建歌单", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "重试创建歌单", exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "批量发布（1）", exact: true })
     .click();
@@ -141,6 +161,15 @@ test("批量导入 MP3 和 M4A，坏文件隔离并可编辑标签草稿", async
       t.title.startsWith("批量 "),
     ),
   ).toHaveLength(2);
+  const batchPlaylist = published.playlists.find((p: { title: string }) =>
+    /^导入歌单 \d+$/.test(p.title),
+  );
+  expect(batchPlaylist.trackIds).toHaveLength(2);
+  expect(
+    published.playlists.filter((p: { title: string }) =>
+      /^导入歌单 \d+$/.test(p.title),
+    ),
+  ).toHaveLength(1);
   expect(
     (
       await page.request.delete(

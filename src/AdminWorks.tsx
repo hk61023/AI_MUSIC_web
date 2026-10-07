@@ -19,6 +19,10 @@ type Props = {
   onEdit: (track: Track, preview?: boolean) => void;
   onPublish: () => void;
   onDelete: () => void;
+  onBulkUnpublish: () => void;
+  autoPlaylist: boolean;
+  canAutoPlaylist: boolean;
+  onAutoPlaylist: (value: boolean) => void;
   onFeatured: (track: Track) => void;
   onUnpublish: (track: Track) => void;
 };
@@ -141,7 +145,7 @@ export default function AdminWorks(p: Props) {
         <span>
           共 {filtered.length} 首{p.published ? "已发布作品" : "草稿"}
         </span>
-        {!p.published && (
+        {
           <label className="check-label">
             <input
               ref={checkAll}
@@ -159,7 +163,7 @@ export default function AdminWorks(p: Props) {
             />
             选择本页
           </label>
-        )}
+        }
       </div>
       <div className="works-rows">
         {rows.map((t) => (
@@ -168,7 +172,7 @@ export default function AdminWorks(p: Props) {
             key={t.id}
             aria-label={`作品 ${t.title}`}
           >
-            {!p.published && (
+            {
               <input
                 type="checkbox"
                 aria-label={`选择作品 ${t.title}`}
@@ -182,7 +186,7 @@ export default function AdminWorks(p: Props) {
                   )
                 }
               />
-            )}
+            }
             <img
               className="work-cover"
               alt=""
@@ -304,19 +308,53 @@ export default function AdminWorks(p: Props) {
           下一页
         </button>
       </div>
-      {!p.published && p.checked.length > 0 && (
-        <div className="works-bulkbar" aria-label="草稿批量操作">
+      {p.checked.length > 0 && (
+        <div
+          className="works-bulkbar"
+          aria-label={p.published ? "已发布作品批量操作" : "草稿批量操作"}
+        >
           <strong>已选 {p.checked.length} 首</strong>
-          <button className="primary" disabled={p.locked} onClick={p.onPublish}>
-            批量发布（{p.checked.length}）
-          </button>
-          <button
-            className="secondary danger"
-            disabled={p.locked}
-            onClick={p.onDelete}
-          >
-            批量删除草稿（{p.checked.length}）
-          </button>
+          {p.published ? (
+            <button
+              className="secondary danger"
+              disabled={p.locked}
+              onClick={p.onBulkUnpublish}
+            >
+              批量下架（{p.checked.length}）
+            </button>
+          ) : (
+            <>
+              <label className="check-label bulk-playlist-option">
+                <input
+                  type="checkbox"
+                  aria-label="自动新建歌单"
+                  checked={p.autoPlaylist && p.canAutoPlaylist}
+                  disabled={p.locked || !p.canAutoPlaylist}
+                  onChange={(e) => p.onAutoPlaylist(e.target.checked)}
+                />
+                发布后自动新建歌单
+                {!p.canAutoPlaylist && (
+                  <small>
+                    请选择本次导入的作品；如有待创建歌单，请先重试。
+                  </small>
+                )}
+              </label>
+              <button
+                className="primary"
+                disabled={p.locked}
+                onClick={p.onPublish}
+              >
+                批量发布（{p.checked.length}）
+              </button>
+              <button
+                className="secondary danger"
+                disabled={p.locked}
+                onClick={p.onDelete}
+              >
+                批量删除草稿（{p.checked.length}）
+              </button>
+            </>
+          )}
           <button
             className="secondary"
             disabled={p.locked}
